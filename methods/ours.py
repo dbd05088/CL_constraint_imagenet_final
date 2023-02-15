@@ -246,7 +246,7 @@ class Ours(ER):
                 
                 coeff_dict[key] = abs(self.line_fitter.coef_)
                 
-                if abs(self.line_fitter.coef_) < threshold and idx not in self.freeze_idx
+                if abs(self.line_fitter.coef_) < threshold and idx not in self.freeze_idx:
                     print("!!freeze", idx, "seed", self.rnd_seed)
                     print("freeze_idx", self.freeze_idx)
                     #self.freeze_layer(idx)
