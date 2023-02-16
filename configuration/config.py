@@ -128,6 +128,8 @@ def base_parser():
     parser.add_argument("--online_iter", type=float, default=1, help="number of model updates per samples seen.")
 
     # Ours
+    parser.add_argument("--max_validation_interval", type=int, default=3000)
+    parser.add_argument("--min_validation_interval", type=int, default=300)
     parser.add_argument("--version", type=str, default="ver2")
     parser.add_argument("--interval", type=int, default=3)
     parser.add_argument("--threshold", type=float, default=1e-4)

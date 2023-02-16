@@ -132,8 +132,8 @@ class Kornia_Randaugment(torch.nn.Module):
         #cls_list = [cls for cls, loss in enumerate(cls_loss) if class_count[cls]>=20]
         #cls_loss = [loss for cls, loss in enumerate(cls_loss) if class_count[cls]>=20]
         
-        print("class_count")
-        print(class_count)
+        #print("class_count")
+        #print(class_count)
         
         '''
         print("cls_list")
@@ -157,7 +157,7 @@ class Kornia_Randaugment(torch.nn.Module):
             else:
             '''
             line_fitter.fit(np.array((range(length))).reshape(-1,1), self.prev_cls_loss[cls][-length:])
-            print("cls 기울기", line_fitter.coef_)
+            #print("cls 기울기", line_fitter.coef_)
             
             if cls >= len(self.cls_magnitude):
                 # 처음 들어온 class라면 default 값인 self.magnitude로 채워주기

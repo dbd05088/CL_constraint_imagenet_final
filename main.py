@@ -152,9 +152,12 @@ def main():
 
         samples_cnt += 1
         method.online_step(data, samples_cnt, args.n_worker)
-
-        if samples_cnt % args.val_period == 0:
-            method.online_validate(samples_cnt, 512, args.n_worker)
+        if args.max_validation_interval is not None and args.min_validation_interval is not None:
+            if samples_cnt % method.get_validation_interval() == 0:
+                method.online_validate(samples_cnt, 512, args.n_worker)
+        else:
+            if samples_cnt % args.val_period == 0:
+                method.online_validate(samples_cnt, 512, args.n_worker)
 
         if samples_cnt % args.eval_period == 0:
             eval_dict = method.online_evaluate(test_datalist, samples_cnt, 512, args.n_worker, cls_dict, cls_addition, data["time"])

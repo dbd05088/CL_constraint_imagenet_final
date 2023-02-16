@@ -53,12 +53,15 @@ class Ours(ER):
         self.sample_std_list = []
         self.sma_class_loss = {}
         self.freeze_idx = []
+        self.add_new_class_time = []
         self.ver = kwargs["version"]
         self.avg_prob = kwargs["avg_prob"]
         self.weight_option = kwargs["weight_option"]
         self.weight_method = kwargs["weight_method"]
         self.cos = nn.CosineSimilarity(dim=0, eps=1e-6)
         self.prev_weight_list = None
+        self.max_validation_interval = kwargs["max_validation_interval"]
+        self.min_validation_interval = kwargs["min_validation_interval"]
         self.sigma = kwargs["sigma"]
         self.threshold = kwargs["threshold"]
         self.unfreeze_threshold = kwargs["unfreeze_threshold"]
@@ -196,6 +199,7 @@ class Ours(ER):
         return self.total_flops
 
     def online_validate(self, sample_num, batch_size, n_worker):
+        print("!!validation interval", self.get_validation_interval())
         # for validation
         val_df = pd.DataFrame(self.valid_list)
         print()
@@ -229,9 +233,11 @@ class Ours(ER):
         for idx, key in enumerate(list(self.past_dist_dict.keys())):
             distances = self.past_dist_dict[key]
             
+            '''
             if not self.prev_check(idx):
                 # 앞의 layer가 다 freeze 되어 있어야만 다음 layer 확인 진행하는거
                 break
+            '''
             
             '''
             #unfreeze 하려면 이부분 주석처리
@@ -246,19 +252,19 @@ class Ours(ER):
                 
                 coeff_dict[key] = abs(self.line_fitter.coef_)
                 
-                if abs(self.line_fitter.coef_) < threshold and idx not in self.freeze_idx:
+                if abs(self.line_fitter.coef_) < threshold and idx not in self.freeze_idx and self.prev_check(idx):
                     print("!!freeze", idx, "seed", self.rnd_seed)
-                    print("freeze_idx", self.freeze_idx)
+                    print("freezed_idx", self.freeze_idx)
                     #self.freeze_layer(idx)
                     self.freeze_idx.append(idx)
                 
                 if unfreeze_threshold is not None: # Unfreeze 할 때    
-                    if abs(self.line_fitter.coef_) > unfreeze_threshold and idx in self.freeze_idx:
+                    if self.line_fitter.coef_ > unfreeze_threshold and idx in self.freeze_idx:
                         print("!!unfreeze", idx, "seed", self.rnd_seed)
                         #self.freeze_layer(idx)
-                        self.freeze_idx.remove(idx)
-                        print("freeze_idx", self.freeze_idx)
-            
+                        for l_idx in range(idx, len(self.freeze_idx)):
+                            self.freeze_idx.remove(l_idx)
+                        print("freezed_idx", self.freeze_idx)
         
         self.writer.add_scalars(f"val/coeff", coeff_dict, sample_num)
         
@@ -307,6 +313,24 @@ class Ours(ER):
         for name, param in self.model.named_parameters():
             print(name, param.requires_grad)
         '''
+
+    def get_validation_interval(self):
+        if len(self.add_new_class_time) <= 1:
+            return self.min_validation_interval*(1/3)
+    
+        intervals =  [self.add_new_class_time[i+1] - self.add_new_class_time[i] for i in range(len(self.add_new_class_time)-1)]
+        mean_intervals = sum(intervals) / len(intervals)
+        
+        if mean_intervals < self.min_validation_interval:
+            mean_intervals = self.min_validation_interval
+        elif mean_intervals > self.max_validation_interval:
+            mean_intervals = self.max_validation_interval
+        '''
+        else:
+            mean_intervals *= (1/3)
+        '''
+        
+        return mean_intervals * (1/3)
 
     def online_evaluate(self, test_list, sample_num, batch_size, n_worker, cls_dict, cls_addition, data_time):
         '''
@@ -394,6 +418,9 @@ class Ours(ER):
         if sample['klass'] not in self.exposed_classes:
             self.add_new_class(sample['klass'], sample)
             self.writer.add_scalar(f"train/add_new_class", 1, sample_num)
+            self.add_new_class_time.append(sample_num)
+            print("seed", self.rnd_seed, "dd_new_class_time")
+            print(self.add_new_class_time)
         else:
             self.writer.add_scalar(f"train/add_new_class", 0, sample_num)
 
@@ -485,7 +512,8 @@ class Ours(ER):
                 new_index = [i for i in new_index if i<len(self.features["block1"][0])]
                 for i in range(5):
                     block_name = "block"+str(i)
-                    self.features[block_name] = [copy.deepcopy(feature[new_index]) for feature in self.features[block_name]]
+                    # copy.deepcopy 뺌
+                    self.features[block_name] = [feature[new_index] for feature in self.features[block_name]]
             ############################
         
         self.valid_list = valid_list
@@ -507,7 +535,7 @@ class Ours(ER):
             shadow_buffers[name].copy_(buffer)
 
     def add_new_class(self, class_name, sample=None):
-        print("add_new_class!!")
+        print("!!add_new_class seed", self.rnd_seed)
         self.sma_class_loss[len(self.exposed_classes)] = []
         self.exposed_classes.append(class_name)
         self.num_learned_class = len(self.exposed_classes)
@@ -527,7 +555,9 @@ class Ours(ER):
 
         # 처음에는 class 0으로 가득 차있다가 갈수록 class 개수가 증가할수록 1개의 class당 차지하는 공간의 크기를 줄여주는 것
         # 이떄, valid_list에서 제거된 sample은 traning에 쓰이는 것이 아니라, 아예 제거되는 것
-        self.ema_model.fc = copy.deepcopy(self.model.fc)
+        
+        if self.ver=="ver3":
+            self.ema_model.fc = copy.deepcopy(self.model.fc)
         
         if self.num_learned_class > 1 and len(self.valid_list)>0:
             self.online_reduce_valid(self.num_learned_class)
@@ -649,7 +679,8 @@ class Ours(ER):
                 self.optimizer.step()
 
             # update ema model
-            self.update_ema_model()
+            if self.ver == "ver3":
+                self.update_ema_model()
             
             total_loss += loss.item()
             correct += torch.sum(preds == y.unsqueeze(1)).item()
@@ -913,7 +944,6 @@ class Ours(ER):
                 total_loss += loss.item()
                 label += y.tolist()
 
-
         if self.ver not in ["ver5", "ver6", "ver7", "ver8"]:
             for i in range(5):
                 key_name = "block" + str(i)
@@ -983,7 +1013,9 @@ class Ours(ER):
                     stack_candidate = [feature[:min(lengths)] for feature in self.features[key_name]]
                     dist = abs(((torch.mean(torch.stack(stack_candidate), dim=0) - current_feature_dict[key_name][:min(lengths)])**2).mean().item()) # for ver4
                     
-                    self.features[key_name].append(copy.deepcopy(current_feature_dict[key_name]))
+                    print("")
+                    #self.features[key_name].append(copy.deepcopy(current_feature_dict[key_name]))
+                    self.features[key_name].append(current_feature_dict[key_name])
                     weight_difference_dict[key_name] = dist
                     if key_name not in self.past_dist_dict.keys():
                         self.past_dist_dict[key_name] = [dist]
@@ -997,6 +1029,7 @@ class Ours(ER):
                 for key in list(current_feature_dict.keys()):
                     #self.features[key] = [torch.cat(copy.deepcopy(current_feature_dict[key]), dim=0)]
                     self.features[key] = [copy.deepcopy(current_feature_dict[key])]
+                    self.features[key] = [current_feature_dict[key]]
             ######################
 
         elif self.ver == "ver4_1":
