@@ -314,9 +314,10 @@ class Ours(ER):
             print(name, param.requires_grad)
         '''
 
+
     def get_validation_interval(self):
         if len(self.add_new_class_time) <= 1:
-            return self.min_validation_interval*(1/3)
+            return self.min_validation_interval
     
         intervals =  [self.add_new_class_time[i+1] - self.add_new_class_time[i] for i in range(len(self.add_new_class_time)-1)]
         mean_intervals = sum(intervals) / len(intervals)
@@ -325,12 +326,9 @@ class Ours(ER):
             mean_intervals = self.min_validation_interval
         elif mean_intervals > self.max_validation_interval:
             mean_intervals = self.max_validation_interval
-        '''
-        else:
-            mean_intervals *= (1/3)
-        '''
         
-        return mean_intervals * (1/3)
+        return mean_intervals
+    
 
     def online_evaluate(self, test_list, sample_num, batch_size, n_worker, cls_dict, cls_addition, data_time):
         '''
