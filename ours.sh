@@ -1,7 +1,7 @@
 #/bin/bash
 
 # CIL CONFIG
-NOTE="ours_cifar10_sample" # Short description of the experiment. (WARNING: logs/results with the same note will be overwritten!)
+NOTE="ours_cifar10_unfreeze_ver4_1" # Short description of the experiment. (WARNING: logs/results with the same note will be overwritten!)
 MODE="ours"
 DATASET="cifar10" # cifar10, cifar100, tinyimagenet, imagenet
 SIGMA=10
@@ -10,7 +10,7 @@ INIT_CLS=100
 GPU_TRANSFORM="--gpu_transform"
 HUMAN_TRAINING="False"
 USE_AMP="--use_amp"
-SEEDS="1"
+SEEDS="1 2 3"
 AVG_PROB="0.4"
 RECENT_RATIO="0.8"
 USE_CLASS_BALANCING="True"
@@ -21,12 +21,12 @@ KLASS_WARMUP="300"
 KLASS_TRAIN_WARMUP="50"
 T="8"
 CURRICULUM_OPTION="class_acc"
-VERSION="ver4"
+VERSION="ver4_1"
 INTERVAL=5
-THRESHOLD="1e-4"
-UNFREEZE_THRESHOLD="1e-3"
-MAX_VALIDATION_INTERVAL=1000
-MIN_VALIDATION_INTERVAL=500
+THRESHOLD="5e-2"
+UNFREEZE_THRESHOLD="1e-1"
+MAX_VALIDATION_INTERVAL=0
+MIN_VALIDATION_INTERVAL=0
 
 if [ "$DATASET" == "cifar10" ]; then
     MEM_SIZE=50000 ONLINE_ITER=1
@@ -39,8 +39,8 @@ elif [ "$DATASET" == "cifar100" ]; then
     BATCHSIZE=16; LR=3e-4 OPT_NAME="adam" SCHED_NAME="default" IMP_UPDATE_PERIOD=1
 
 elif [ "$DATASET" == "tinyimagenet" ]; then
-    MEM_SIZE=100000 ONLINE_ITER=3
-    MODEL_NAME="resnet18" VAL_PERIOD=100 EVAL_PERIOD=100
+    MEM_SIZE=100000 ONLINE_ITER=0.75
+    MODEL_NAME="resnet18" VAL_PERIOD=500 EVAL_PERIOD=100
     BATCHSIZE=32; LR=3e-4 OPT_NAME="adam" SCHED_NAME="default" IMP_UPDATE_PERIOD=1
 
 elif [ "$DATASET" == "imagenet" ]; then
@@ -55,7 +55,7 @@ fi
 
 for RND_SEED in $SEEDS
 do
-    CUDA_VISIBLE_DEVICES=3 nohup python main.py --mode $MODE --loss_balancing_option $LOSS_BALANCING_OPTION \
+    CUDA_VISIBLE_DEVICES=4 nohup python main.py --mode $MODE --loss_balancing_option $LOSS_BALANCING_OPTION \
     --dataset $DATASET --T $T --use_class_balancing $USE_CLASS_BALANCING --klass_train_warmup $KLASS_TRAIN_WARMUP \
     --sigma $SIGMA --repeat $REPEAT --init_cls $INIT_CLS --weight_method $WEIGHT_METHOD --max_validation_interval $MAX_VALIDATION_INTERVAL \
     --rnd_seed $RND_SEED --weight_option $WEIGHT_OPTION --klass_warmup $KLASS_WARMUP --threshold $THRESHOLD --min_validation_interval $MIN_VALIDATION_INTERVAL \

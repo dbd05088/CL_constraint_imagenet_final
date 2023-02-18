@@ -199,7 +199,7 @@ class Ours(ER):
         return self.total_flops
 
     def online_validate(self, sample_num, batch_size, n_worker):
-        print("!!validation interval", self.get_validation_interval())
+        #print("!!validation interval", self.get_validation_interval())
         # for validation
         val_df = pd.DataFrame(self.valid_list)
         print()
@@ -228,10 +228,14 @@ class Ours(ER):
         threshold = self.threshold #1e-4
         unfreeze_threshold = self.unfreeze_threshold #1e-4
         
+        normalized_dict = {}
         coeff_dict = {}
         
         for idx, key in enumerate(list(self.past_dist_dict.keys())):
             distances = self.past_dist_dict[key]
+            avg_distances = sum(distances) / len(distances)
+            print("avg_distances", avg_distances)
+            normalized_dict[key] = avg_distances
             
             '''
             if not self.prev_check(idx):
@@ -267,6 +271,7 @@ class Ours(ER):
                         print("freezed_idx", self.freeze_idx)
         
         self.writer.add_scalars(f"val/coeff", coeff_dict, sample_num)
+        self.writer.add_scalars(f"val/normalized", normalized_dict, sample_num)
         
         # validation set에서 class_loss
         class_loss = val_dict['cls_loss']
@@ -583,7 +588,8 @@ class Ours(ER):
 
         for i in range(iterations):
             self.model.train()
-            self.freeze_layers()
+            if self.ver == "ver4":
+                self.freeze_layers()
 
             x = []
             y = []
@@ -1000,7 +1006,7 @@ class Ours(ER):
             self.writer.add_scalars(f"train/weight_difference", weight_difference_dict, sample_num)
             ######################
         
-        elif self.ver == "ver4":
+        elif self.ver == "ver4" or self.ver == "ver4_1":
             ######################
             # for ver4
             if self.features is not None:
@@ -1028,33 +1034,6 @@ class Ours(ER):
                     #self.features[key] = [torch.cat(copy.deepcopy(current_feature_dict[key]), dim=0)]
                     self.features[key] = [copy.deepcopy(current_feature_dict[key])]
                     self.features[key] = [current_feature_dict[key]]
-            ######################
-
-        elif self.ver == "ver4_1":
-            ######################
-            # for ver4_1
-            if self.features is not None:
-                weight_difference_dict = {}
-                for i in range(5):
-                    key_name = "block" + str(i)
-                    lengths = [len(feature) for feature in self.features[key_name]]
-                    stack_candidate = [feature[:min(lengths)] for feature in self.features[key_name]]
-                    dist = abs(((torch.mean(torch.stack(stack_candidate), dim=0) - current_feature_dict[key_name][:min(lengths)])**2).mean().item()) # for ver4_1
-                    
-                    self.features[key_name].append(copy.deepcopy(current_feature_dict[key_name]))
-                    weight_difference_dict[key_name] = dist
-                    if key_name not in self.past_dist_dict.keys():
-                        self.past_dist_dict[key_name] = [dist]
-                    else:
-                        self.past_dist_dict[key_name].append(dist)
-                    
-                self.writer.add_scalars(f"train/weight_difference", weight_difference_dict, sample_num)
-                
-            else:
-                self.features = {}
-                for key in list(current_feature_dict.keys()):
-                    #self.features[key] = [torch.cat(copy.deepcopy(current_feature_dict[key]), dim=0)]
-                    self.features[key] = [copy.deepcopy(current_feature_dict[key])]
             ######################
 
         avg_acc = total_correct / total_num_data
