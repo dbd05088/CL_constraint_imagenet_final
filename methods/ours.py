@@ -201,10 +201,12 @@ class Ours(ER):
         return self.total_flops
 
     def get_threshold(self):
-        # 하위 20프로 정도면 freeze 해도 괜춘할 것이다.
-        
-        # try 1) block 0의 평균의 self.threshold_coeff배 곱하기
-        return np.mean(self.normalized_dict["block0"]) * self.threshold_coeff
+        if "block0" not in self.normalized_dict.keys():
+            return 1 #(절대 freeze 될 일 없게)
+        else:
+            # try 1) block 0의 평균의 self.threshold_coeff배 곱하기
+            # 하위 20프로 정도면 freeze 해도 괜춘할 것이다.
+            return np.mean(self.normalized_dict["block0"]) * self.threshold_coeff
     
         # try 2) TODO - layer별로 하위 20프로가 되면 layer freezing 하기 
         
@@ -244,6 +246,7 @@ class Ours(ER):
         ######### pre-defined threshold #########
         threshold = self.get_threshold() # ex) 0.0001
         unfreeze_threshold = threshold*5 # ex) 0.0005
+        print("seed", self.rnd_seed, "threshold", threshold)
         coeff_dict = {}
         
         for idx, key in enumerate(list(self.past_dist_dict.keys())):
@@ -288,6 +291,7 @@ class Ours(ER):
                         print("freezed_idx", self.freeze_idx)
         
         self.writer.add_scalars(f"val/coeff", coeff_dict, sample_num)
+        self.writer.add_scalar(f"val/threshold", threshold, sample_num)
         #self.writer.add_scalars(f"val/normalized", normalized_dict, sample_num)
         
         # validation set에서 class_loss
