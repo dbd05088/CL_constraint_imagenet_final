@@ -52,9 +52,11 @@ class Ours(ER):
         self.features = None
         self.sample_std_list = []
         self.sma_class_loss = {}
+        self.normalized_dict = {}
         self.freeze_idx = []
         self.add_new_class_time = []
         self.ver = kwargs["version"]
+        self.threshold_coeff = kwargs["threshold_coeff"]
         self.avg_prob = kwargs["avg_prob"]
         self.weight_option = kwargs["weight_option"]
         self.weight_method = kwargs["weight_method"]
@@ -198,6 +200,15 @@ class Ours(ER):
     def get_total_flops(self):
         return self.total_flops
 
+    def get_threshold(self):
+        # 하위 20프로 정도면 freeze 해도 괜춘할 것이다.
+        
+        # try 1) block 0의 평균의 self.threshold_coeff배 곱하기
+        return np.mean(self.normalized_dict["block0"]) * self.threshold_coeff
+    
+        # try 2) TODO - layer별로 하위 20프로가 되면 layer freezing 하기 
+        
+
     def online_validate(self, sample_num, batch_size, n_worker):
         #print("!!validation interval", self.get_validation_interval())
         # for validation
@@ -225,17 +236,18 @@ class Ours(ER):
 
         # check for layer freezing
         interval = self.interval
-        threshold = self.threshold #1e-4
-        unfreeze_threshold = self.unfreeze_threshold #1e-4
         
-        normalized_dict = {}
+        ######### pre-defined threshold #########
+        threshold = self.threshold #1e-4
+        unfreeze_threshold = self.unfreeze_threshold #1e-2
+        
+        ######### pre-defined threshold #########
+        threshold = self.get_threshold() # ex) 0.0001
+        unfreeze_threshold = threshold*5 # ex) 0.0005
         coeff_dict = {}
         
         for idx, key in enumerate(list(self.past_dist_dict.keys())):
             distances = self.past_dist_dict[key]
-            avg_distances = sum(distances) / len(distances)
-            print("avg_distances", avg_distances)
-            normalized_dict[key] = avg_distances
             
             '''
             if not self.prev_check(idx):
@@ -256,6 +268,11 @@ class Ours(ER):
                 
                 coeff_dict[key] = abs(self.line_fitter.coef_)
                 
+                if key not in self.normalized_dict.keys():
+                    self.normalized_dict[key] = [abs(self.line_fitter.coef_)]
+                else:
+                    self.normalized_dict[key].append(abs(self.line_fitter.coef_))
+                
                 if abs(self.line_fitter.coef_) < threshold and idx not in self.freeze_idx and self.prev_check(idx):
                     print("!!freeze", idx, "seed", self.rnd_seed)
                     print("freezed_idx", self.freeze_idx)
@@ -271,7 +288,7 @@ class Ours(ER):
                         print("freezed_idx", self.freeze_idx)
         
         self.writer.add_scalars(f"val/coeff", coeff_dict, sample_num)
-        self.writer.add_scalars(f"val/normalized", normalized_dict, sample_num)
+        #self.writer.add_scalars(f"val/normalized", normalized_dict, sample_num)
         
         # validation set에서 class_loss
         class_loss = val_dict['cls_loss']
