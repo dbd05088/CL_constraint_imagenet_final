@@ -1,9 +1,9 @@
 #/bin/bash
 
 # CIL CONFIG
-NOTE="ours_cifar100_unfreeze_ver4_period500_threshold_coeff_0.2" # Short description of the experiment. (WARNING: logs/results with the same note will be overwritten!)
+NOTE="ours_cifar10_unfreeze_ver4_period500_policy_block_threshold_coeff_0.05_unfreeze_coeff_50" # Short description of the experiment. (WARNING: logs/results with the same note will be overwritten!)
 MODE="ours"
-DATASET="cifar100" # cifar10, cifar100, tinyimagenet, imagenet
+DATASET="cifar10" # cifar10, cifar100, tinyimagenet, imagenet
 SIGMA=10
 REPEAT=1
 INIT_CLS=100
@@ -21,13 +21,15 @@ KLASS_WARMUP="300"
 KLASS_TRAIN_WARMUP="50"
 T="8"
 CURRICULUM_OPTION="class_acc"
-VERSION="ver4_1"
+VERSION="ver4"
 INTERVAL=5
 THRESHOLD="5e-2"
 UNFREEZE_THRESHOLD="1e-1"
 MAX_VALIDATION_INTERVAL=0
 MIN_VALIDATION_INTERVAL=0
-THRESHOLD_COEFF=0.2
+THRESHOLD_COEFF=0.05
+THRESHOLD_POLICY="block"
+UNFREEZE_COEFF=50
 
 if [ "$DATASET" == "cifar10" ]; then
     MEM_SIZE=50000 ONLINE_ITER=1
@@ -56,12 +58,12 @@ fi
 
 for RND_SEED in $SEEDS
 do
-    CUDA_VISIBLE_DEVICES=5 nohup python main.py --mode $MODE --loss_balancing_option $LOSS_BALANCING_OPTION \
+    CUDA_VISIBLE_DEVICES=7 nohup python main.py --mode $MODE --loss_balancing_option $LOSS_BALANCING_OPTION \
     --dataset $DATASET --T $T --use_class_balancing $USE_CLASS_BALANCING --klass_train_warmup $KLASS_TRAIN_WARMUP \
     --sigma $SIGMA --repeat $REPEAT --init_cls $INIT_CLS --weight_method $WEIGHT_METHOD --max_validation_interval $MAX_VALIDATION_INTERVAL \
     --rnd_seed $RND_SEED --weight_option $WEIGHT_OPTION --klass_warmup $KLASS_WARMUP --threshold $THRESHOLD --min_validation_interval $MIN_VALIDATION_INTERVAL \
     --model_name $MODEL_NAME --opt_name $OPT_NAME --sched_name $SCHED_NAME --version $VERSION --unfreeze_threshold $UNFREEZE_THRESHOLD \
-    --lr $LR --batchsize $BATCHSIZE --recent_ratio $RECENT_RATIO --avg_prob $AVG_PROB --interval $INTERVAL --threshold_coeff $THRESHOLD_COEFF \
-    --memory_size $MEM_SIZE $GPU_TRANSFORM --online_iter $ONLINE_ITER --curriculum_option $CURRICULUM_OPTION \
+    --lr $LR --batchsize $BATCHSIZE --recent_ratio $RECENT_RATIO --avg_prob $AVG_PROB --interval $INTERVAL --threshold_coeff $THRESHOLD_COEFF --unfreeze_coeff $UNFREEZE_COEFF \
+    --memory_size $MEM_SIZE $GPU_TRANSFORM --online_iter $ONLINE_ITER --curriculum_option $CURRICULUM_OPTION --threshold_policy $THRESHOLD_POLICY \
     --note $NOTE --val_period $VAL_PERIOD --eval_period $EVAL_PERIOD --imp_update_period $IMP_UPDATE_PERIOD $USE_AMP &
 done

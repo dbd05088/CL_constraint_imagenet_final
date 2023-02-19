@@ -47,6 +47,7 @@ class Ours(ER):
         self.exposed_classes = []
         self.seen = 0
         self.topk = kwargs["topk"]
+        self.threshold_policy = kwargs["threshold_policy"]
         self.past_dist_dict = {}
         self.class_std_list = []
         self.features = None
@@ -57,6 +58,8 @@ class Ours(ER):
         self.add_new_class_time = []
         self.ver = kwargs["version"]
         self.threshold_coeff = kwargs["threshold_coeff"]
+        self.unfreeze_coeff = kwargs["unfreeze_coeff"]
+        
         self.avg_prob = kwargs["avg_prob"]
         self.weight_option = kwargs["weight_option"]
         self.weight_method = kwargs["weight_method"]
@@ -201,15 +204,25 @@ class Ours(ER):
         return self.total_flops
 
     def get_threshold(self):
+        print("self.normalized_dict")
+        print(self.normalized_dict)
+        
+        # initial condition
         if "block0" not in self.normalized_dict.keys():
-            return 1 #(절대 freeze 될 일 없게)
-        else:
+            return 10e-9 #(절대 freeze 될 일 없게)
+        
+        if self.threshold_policy == "block":
             # try 1) block 0의 평균의 self.threshold_coeff배 곱하기
             # 하위 20프로 정도면 freeze 해도 괜춘할 것이다.
             return np.mean(self.normalized_dict["block0"]) * self.threshold_coeff
-    
-        # try 2) TODO - layer별로 하위 20프로가 되면 layer freezing 하기 
         
+        if self.threshold_policy == "blocks":
+            # try 2) layer별로 하위 20프로가 되면 layer freezing 하기 
+            thresholds = []
+            for i in range(5):
+                key_name = "block" + str(i)
+                thresholds[key_name] = np.mean(self.normalized_dict[key_name]) * self.threshold_coeff
+            return np.array(thresholds)
 
     def online_validate(self, sample_num, batch_size, n_worker):
         #print("!!validation interval", self.get_validation_interval())
@@ -240,12 +253,14 @@ class Ours(ER):
         interval = self.interval
         
         ######### pre-defined threshold #########
+        '''
         threshold = self.threshold #1e-4
         unfreeze_threshold = self.unfreeze_threshold #1e-2
+        '''
         
-        ######### pre-defined threshold #########
+        ######### adaptive threshold #########
         threshold = self.get_threshold() # ex) 0.0001
-        unfreeze_threshold = threshold*5 # ex) 0.0005
+        unfreeze_threshold = threshold * self.unfreeze_coeff # ex) 0.0005
         print("seed", self.rnd_seed, "threshold", threshold)
         coeff_dict = {}
         
@@ -267,20 +282,29 @@ class Ours(ER):
             
             if len(distances) >= interval:
                 self.line_fitter.fit(np.array((range(interval))).reshape(-1,1), distances[-interval:])
-                #print("abs(line_fitter.coef_)", abs(self.line_fitter.coef_))
-                
                 coeff_dict[key] = abs(self.line_fitter.coef_)
+                
                 
                 if key not in self.normalized_dict.keys():
                     self.normalized_dict[key] = [abs(self.line_fitter.coef_)]
                 else:
                     self.normalized_dict[key].append(abs(self.line_fitter.coef_))
                 
-                if abs(self.line_fitter.coef_) < threshold and idx not in self.freeze_idx and self.prev_check(idx):
-                    print("!!freeze", idx, "seed", self.rnd_seed)
-                    print("freezed_idx", self.freeze_idx)
-                    #self.freeze_layer(idx)
-                    self.freeze_idx.append(idx)
+                
+                # layer별 threshold
+                if type(threshold) == np.ndarray:
+                    if abs(self.line_fitter.coef_) < threshold[idx] and idx not in self.freeze_idx and self.prev_check(idx):
+                        print("!!freeze", idx, "seed", self.rnd_seed)
+                        print("freezed_idx", self.freeze_idx)
+                        self.freeze_idx.append(idx)
+                # 모든 layer에서 same threshold 사용
+                else:    
+                    if abs(self.line_fitter.coef_) < threshold and idx not in self.freeze_idx and self.prev_check(idx):
+                        print("!!freeze", idx, "seed", self.rnd_seed)
+                        print("freezed_idx", self.freeze_idx)
+                        #self.freeze_layer(idx)
+                        self.freeze_idx.append(idx)
+                
                 
                 if unfreeze_threshold is not None: # Unfreeze 할 때    
                     if self.line_fitter.coef_ > unfreeze_threshold and idx in self.freeze_idx:

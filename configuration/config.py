@@ -131,6 +131,8 @@ def base_parser():
     parser.add_argument("--max_validation_interval", type=int, default=3000)
     parser.add_argument("--min_validation_interval", type=int, default=300)
     parser.add_argument("--threshold_coeff", type=float, default=0.2)
+    parser.add_argument("--unfreeze_coeff", type=int, default=10)
+    parser.add_argument("--threshold_policy", type=str, default="block")
     parser.add_argument("--version", type=str, default="ver2")
     parser.add_argument("--interval", type=int, default=3)
     parser.add_argument("--threshold", type=float, default=1e-4)
