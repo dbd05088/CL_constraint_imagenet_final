@@ -743,21 +743,19 @@ class MemoryDataset(Dataset):
             total_count = sum(self.class_usage_cnt)
             if total_count == 0:
                 total_count = 1
-            '''
             for klass, klass_count in enumerate(self.class_usage_cnt):
                 # 아직 많이 학습에 안쓰인 애들
                 klass_index = np.where(klass == np.array(self.labels))[0]
                 weight[klass_index] = np.exp(-1*(klass_count/total_count))
                 cls_weight.append(np.exp(-1.5*(klass_count/total_count)))
             '''
-            
             ##### for balanced random retrieval #####
             equal_prob = 1/len(self.class_usage_cnt)
             print("equal_prob", equal_prob)
 
             for klass, klass_count in enumerate(self.class_usage_cnt):
                 cls_weight.append(equal_prob)
-            
+            '''
         
         if self.weight_option == "softmax" or "loss":
             weight_tensor = torch.DoubleTensor(cls_weight)
