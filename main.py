@@ -105,7 +105,7 @@ def main():
     # Transform Definition
     mean, std, n_classes, inp_size, _ = get_statistics(dataset=args.dataset)
     print("args.use_human_training", args.use_human_training)
-    train_transform, test_transform = get_transform(args.dataset, args.transforms, args.gpu_transform, args.use_kornia, args.T)#, args.use_human_training)
+    train_transform, test_transform = get_transform(args.dataset, args.transforms, args.gpu_transform, args.use_kornia)#, args.use_human_training)
 
     logger.info(f"Main using train-transforms {train_transform}")
 
@@ -160,9 +160,12 @@ def main():
             if samples_cnt % args.val_period == 0:
                 method.online_validate(samples_cnt, 512, args.n_worker)
         '''
+
+        '''
+        ### for using validation set ###
         if samples_cnt % args.val_period == 0:
             method.online_validate(samples_cnt, 512, args.n_worker)
-            
+        ''' 
         if samples_cnt % args.eval_period == 0:
             eval_dict = method.online_evaluate(test_datalist, samples_cnt, 512, args.n_worker, cls_dict, cls_addition, data["time"])
             eval_results["test_acc"].append(eval_dict['avg_acc'])

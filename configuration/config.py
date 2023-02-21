@@ -59,8 +59,6 @@ def base_parser():
     parser.add_argument(
         "--model_name", type=str, default="resnet18", help="Model name"
     )
-
-    parser.add_argument("--T", type=int, default=8, help="batch size")
     
     # Train
     parser.add_argument("--klass_train_warmup", type=int, default=30)
@@ -128,6 +126,7 @@ def base_parser():
     parser.add_argument("--online_iter", type=float, default=1, help="number of model updates per samples seen.")
 
     # Ours
+    parser.add_argument("--use_weight", type=str, default="classwise")
     parser.add_argument("--max_validation_interval", type=int, default=3000)
     parser.add_argument("--min_validation_interval", type=int, default=300)
     parser.add_argument("--threshold_coeff", type=float, default=0.2)
