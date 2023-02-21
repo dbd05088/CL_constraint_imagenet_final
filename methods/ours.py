@@ -92,6 +92,13 @@ class Ours(ER):
         self.cutmix = "cutmix" in kwargs["transforms"]
         self.test_transform = test_transform
 
+        # Hyunseo: gradient threshold
+        self.grad_mavg = {n: torch.zeros_like(p) for n, p in list(self.model.named_parameters())[:-2] if p.requires_grad}
+        self.grad_mavgsq = {n: torch.zeros_like(p) for n, p in list(self.model.named_parameters())[:-2] if p.requires_grad}
+        self.grad_mvar = {n: torch.zeros_like(p) for n, p in list(self.model.named_parameters())[:-2] if p.requires_grad}
+        self.grad_ema_ratio = 0.001
+        self.grad_criterion = {n: torch.Tensor(0) for n, p in list(self.model.named_parameters())[:-2] if p.requires_grad}
+
         self.klass_train_warmup = kwargs["klass_train_warmup"]
         self.memory_size = kwargs["memory_size"]
         self.interval = kwargs["interval"]
@@ -113,7 +120,6 @@ class Ours(ER):
         self.use_kornia = kwargs["use_kornia"]
         self.use_amp = kwargs["use_amp"]
         self.cls_weight_decay = kwargs["cls_weight_decay"]
-
         
         if self.use_amp:
             self.scaler = torch.cuda.amp.GradScaler()
@@ -818,7 +824,6 @@ class Ours(ER):
                 else:
                     self.prev_weight_list[cls].pop(0)
                     self.prev_weight_list[cls].append(copy.deepcopy(weight))
-                    
 
     def model_forward(self, x, y, x2=None, y2=None, return_cls_loss=False, loss_balancing_option=None, loss_balancing_weight=None):
         '''
@@ -1214,3 +1219,18 @@ class Ours(ER):
             self.memory.replace_sample(sample, idx_to_replace)
         else:
             self.memory.replace_sample(sample)
+
+    # Hyunseo: call after backward
+    def update_gradstat(self):
+        effective_ratio = (2 - self.grad_ema_ratio) / self.grad_ema_ratio
+        for n, p in self.model.named_parameters():
+            if n in self.grad_mavg:
+                if p.requires_grad is True and p.grad is not None:
+                    if not p.grad.isnan().any():
+                        self.grad_mavg[n] += self.grad_ema_ratio * (p.grad.clone().detach().clamp(-1000, 1000) - self.grad_mavg[n])
+                        self.grad_mavgsq[n] += self.grad_ema_ratio * (p.grad.clone().detach().clamp(-1000, 1000) ** 2 - self.grad_mavgsq[n])
+                        self.grad_mvar[n] = self.grad_mavgsq[n] - self.grad_mavg[n] ** 2
+                        self.grad_criterion[n] = (
+                                    torch.abs(self.grad_mavg[n]) / (torch.sqrt(self.grad_mvar[n]) + 1e-10) * np.sqrt(
+                                effective_ratio * self.batch_size)).mean()
+
