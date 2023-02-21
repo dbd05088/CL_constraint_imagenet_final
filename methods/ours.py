@@ -752,6 +752,8 @@ class Ours(ER):
                 loss.backward()
                 self.optimizer.step()
 
+            self.update_gradstat(sample_num)
+
             # update ema model
             if self.ver == "ver3":
                 self.update_ema_model()
@@ -1279,7 +1281,7 @@ class Ours(ER):
             self.memory.replace_sample(sample)
 
     # Hyunseo: call after backward
-    def update_gradstat(self):
+    def update_gradstat(self, sample_num):
         effective_ratio = (2 - self.grad_ema_ratio) / self.grad_ema_ratio
         for n, p in self.model.named_parameters():
             if n in self.grad_mavg:
@@ -1290,5 +1292,5 @@ class Ours(ER):
                         self.grad_mvar[n] = self.grad_mavgsq[n] - self.grad_mavg[n] ** 2
                         self.grad_criterion[n] = (
                                     torch.abs(self.grad_mavg[n]) / (torch.sqrt(self.grad_mvar[n]) + 1e-10) * np.sqrt(
-                                effective_ratio * self.batch_size)).mean()
-
+                                effective_ratio * self.batch_size)).mean().item()
+        self.writer.add_scalars("grad_criterion", self.grad_criterion, sample_num)
