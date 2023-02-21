@@ -739,28 +739,25 @@ class MemoryDataset(Dataset):
             # then samplewise로 use_count 기반
             
         elif weight_method == "count_important":
+            
             total_count = sum(self.class_usage_cnt)
             if total_count == 0:
                 total_count = 1
+            '''
             for klass, klass_count in enumerate(self.class_usage_cnt):
                 # 아직 많이 학습에 안쓰인 애들
                 klass_index = np.where(klass == np.array(self.labels))[0]
                 weight[klass_index] = np.exp(-1*(klass_count/total_count))
                 cls_weight.append(np.exp(-1.5*(klass_count/total_count)))
-
-        '''
-        elif weight_method == "mixed":
-            total_count = sum(self.class_usage_cnt)
-            if total_count == 0:
-                total_count = 1
-            max_time = max(self.cls_times) + 0.5
+            '''
+            
+            ##### for balanced random retrieval #####
+            equal_prob = 1/len(self.class_usage_cnt)
+            print("equal_prob", equal_prob)
 
             for klass, klass_count in enumerate(self.class_usage_cnt):
-                # 아직 많이 학습에 안쓰인 애들
-                klass_time = self.cls_times[klass]
-                klass_index = np.where(klass == np.array(self.labels))[0]
-                weight[klass_index] = np.exp(-1*(klass_count/total_count))
-        '''
+                cls_weight.append(equal_prob)
+            
         
         if self.weight_option == "softmax" or "loss":
             weight_tensor = torch.DoubleTensor(cls_weight)
@@ -948,6 +945,7 @@ class MemoryDataset(Dataset):
                 indices = np.random.choice(range(len(self.images)), size=memory_batch_size, replace=False, p=weight)
                 
             else:
+                '''
                 if prev_batch_index is not None:
                     indices = np.zeros_like(prev_batch_index)
                     cand_dict = {}
@@ -971,7 +969,8 @@ class MemoryDataset(Dataset):
                             indices[candidate_index_position[i]] = index
                     
                 else:       
-                    indices = np.random.choice(range(len(self.images)), size=memory_batch_size, replace=False)
+                '''
+                indices = np.random.choice(range(len(self.images)), size=memory_batch_size, replace=False)
         
             # batch 내 select된 class를 count에 반영
             for i in indices:

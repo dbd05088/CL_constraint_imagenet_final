@@ -59,7 +59,7 @@ class Ours(ER):
         self.ver = kwargs["version"]
         self.threshold_coeff = kwargs["threshold_coeff"]
         self.unfreeze_coeff = kwargs["unfreeze_coeff"]
-        
+        self.use_weight = kwargs["use_weight"] 
         self.avg_prob = kwargs["avg_prob"]
         self.weight_option = kwargs["weight_option"]
         self.weight_method = kwargs["weight_method"]
@@ -78,8 +78,6 @@ class Ours(ER):
         self.line_fitter = LinearRegression()
         self.klass_warmup = kwargs["klass_warmup"]
         self.loss_balancing_option = kwargs["loss_balancing_option"]
-        self.use_class_balancing = kwargs["use_class_balancing"]
-        print("self.use_class_balancing", self.use_class_balancing)
         self.dataset = kwargs["dataset"]
         self.model_name = kwargs["model_name"]
         self.opt_name = kwargs["opt_name"]
@@ -221,7 +219,7 @@ class Ours(ER):
             thresholds = []
             for i in range(5):
                 key_name = "block" + str(i)
-                thresholds[key_name] = np.mean(self.normalized_dict[key_name]) * self.threshold_coeff
+                thresholds.append(np.mean(self.normalized_dict[key_name]) * self.threshold_coeff)
             return np.array(thresholds)
 
     def online_validate(self, sample_num, batch_size, n_worker):
@@ -297,6 +295,12 @@ class Ours(ER):
                         print("!!freeze", idx, "seed", self.rnd_seed)
                         print("freezed_idx", self.freeze_idx)
                         self.freeze_idx.append(idx)
+                    if self.line_fitter.coef_ > unfreeze_threshold[idx] and idx in self.freeze_idx:
+                        print("!!unfreeze", idx, "seed", self.rnd_seed)
+                        for l_idx in range(idx, len(self.freeze_idx)):
+                            self.freeze_idx.remove(l_idx)
+                        print("freezed_idx", self.freeze_idx)
+                            
                 # 모든 layer에서 same threshold 사용
                 else:    
                     if abs(self.line_fitter.coef_) < threshold and idx not in self.freeze_idx and self.prev_check(idx):
@@ -304,18 +308,25 @@ class Ours(ER):
                         print("freezed_idx", self.freeze_idx)
                         #self.freeze_layer(idx)
                         self.freeze_idx.append(idx)
-                
-                
-                if unfreeze_threshold is not None: # Unfreeze 할 때    
+
                     if self.line_fitter.coef_ > unfreeze_threshold and idx in self.freeze_idx:
                         print("!!unfreeze", idx, "seed", self.rnd_seed)
                         #self.freeze_layer(idx)
                         for l_idx in range(idx, len(self.freeze_idx)):
                             self.freeze_idx.remove(l_idx)
-                        print("freezed_idx", self.freeze_idx)
-        
+                        print("freezed_idx", self.freeze_idx)               
+                
+                
         self.writer.add_scalars(f"val/coeff", coeff_dict, sample_num)
-        self.writer.add_scalar(f"val/threshold", threshold, sample_num)
+        if type(threshold) == np.ndarray:
+            threshold_dict = {}
+            for i in range(5):
+                name = "block" + str(i)
+                threshold_dict[name] = threshold[i]
+            self.writer.add_scalars(f"val/threshold", threshold_dict, sample_num)
+        else: 
+            self.writer.add_scalar(f"val/threshold", threshold, sample_num)
+        
         #self.writer.add_scalars(f"val/normalized", normalized_dict, sample_num)
         
         # validation set에서 class_loss
@@ -473,9 +484,14 @@ class Ours(ER):
             self.writer.add_scalar(f"train/add_new_class", 0, sample_num)
 
         self.total_count += 1
+    
+        self.update_memory(sample, self.total_count)
+        '''
+        # for use validation set
         use_sample = self.online_valid_update(sample)
         if use_sample:
             self.update_memory(sample, self.total_count)
+        '''
 
         self.num_updates += self.online_iter
         if self.num_updates >= 1:
@@ -648,9 +664,9 @@ class Ours(ER):
             class_loss = [np.mean(self.sma_class_loss[key]) for key in list(self.sma_class_loss.keys()) if len(self.sma_class_loss[key]) != 0]
             
             if len(class_loss) == 0:
-                memory_data = self.memory.get_batch(memory_batch_size, use_weight="classwise", weight_method = self.weight_method)
+                memory_data = self.memory.get_batch(memory_batch_size, use_weight=self.use_weight, weight_method = self.weight_method)
             else:
-                memory_data = self.memory.get_batch(memory_batch_size, use_weight="classwise", weight_method = self.weight_method, class_loss = class_loss)
+                memory_data = self.memory.get_batch(memory_batch_size, use_weight=self.use_weight, weight_method = self.weight_method, class_loss = class_loss)
             
             # std check 위해서
             class_std, sample_std = self.memory.get_std()
@@ -659,8 +675,11 @@ class Ours(ER):
             
             x.append(memory_data['image'])
             y.append(memory_data['label'])
-            cls_weight = memory_data['cls_weight']
             counter = memory_data["counter"]
+            if self.use_weight=="classwise":
+                cls_weight = memory_data['cls_weight']
+            else:
+                cls_weight = None
 
             if self.use_batch_cutmix:
                 memory_data2 = self.memory.get_batch(memory_batch_size, prev_batch_index=memory_data['indices'])
@@ -837,14 +856,11 @@ class Ours(ER):
             loss_balancing_weight /= np.sum(loss_balancing_weight)
         elif loss_balancing_option == "class_weight": # default
             pass
-        else:
+        elif loss_balancing_option == "none":
+            loss_balancing_weight=None
             pass
 
-        #do_cutmix = self.cutmix and np.random.rand(1) < 0.5
-        #do_cutmix = self.cutmix and np.random.rand(1) < self.memory.get_ratio(y)
-        do_cutmix=False
-
-        #TODO Cutmix를 0.5의 확률이 아닌, class별로 magnitude 기반으로 바꿔주기
+        do_cutmix = self.cutmix and np.random.rand(1) < 0.5
         
         if do_cutmix:
             x, labels_a, labels_b, lam = cutmix_data(x=x, y=y, alpha=1.0)
@@ -859,6 +875,7 @@ class Ours(ER):
                         
                         if loss_balancing_weight is None:
                             loss = torch.mean(total_loss) # 1
+                            
                         else:
                             for i, sample_loss in enumerate(total_loss):
                                 if i==0:
@@ -871,6 +888,7 @@ class Ours(ER):
                         loss = lam * self.criterion(logit, labels_a) + (1 - lam) * self.criterion(logit, labels_b) # 4
                         self.total_flops += (len(logit) * 4) / 10e9
             else:
+                '''
                 logit, features = self.model(x, get_features=True)
                 if self.weight_option == "loss":
                     loss_a = self.criterion(logit, labels_a)
@@ -881,9 +899,48 @@ class Ours(ER):
                 else:
                     loss = lam * self.criterion(logit, labels_a) + (1 - lam) * self.criterion(logit, labels_b)
                     self.total_flops += (len(logit) * 4) / 10e9
+                '''
+                logit, features = self.model(x, get_features=True)
+                if self.weight_option == "loss": # 이때는 self.criterion(reduction="none")
+                    loss_a = self.criterion(logit, labels_a) # 1
+                    loss_b = self.criterion(logit, labels_b) # 1
+                    total_loss = lam * loss_a + (1 - lam) * (loss_b) # 3
+
+                    if loss_balancing_weight is None:
+                        loss = torch.mean(total_loss) # 1
+
+                    else:
+                        for i, sample_loss in enumerate(total_loss):
+                            if i==0:
+                                loss = loss_balancing_weight[i] * sample_loss
+                            else:
+                                loss += loss_balancing_weight[i] * sample_loss
+
+                    self.total_flops += (len(logit) * 6) / 10e9
+                else: # 이때는 self.criterion(reduction="mean")
+                    loss = lam * self.criterion(logit, labels_a) + (1 - lam) * self.criterion(logit, labels_b) # 4
+                    self.total_flops += (len(logit) * 4) / 10e9
         else:
             if self.use_amp:
                 with torch.cuda.amp.autocast():
+                    logit, features = self.model(x, get_features=True)
+                    if self.weight_option == "loss":
+                        total_loss = self.criterion(logit, y)
+
+                        if loss_balancing_weight is None:
+                            loss = torch.mean(total_loss) # 1
+                        else:
+                            for i, sample_loss in enumerate(total_loss):
+                                if i==0:
+                                    loss = loss_balancing_weight[i] * sample_loss
+                                else:
+                                    loss += loss_balancing_weight[i] * sample_loss
+                    else:
+                        loss = self.criterion(logit, y)
+
+                    self.total_flops += (len(logit) * 2) / 10e9
+                    '''
+                    self.total_flops += (len(logit) * 2) / 10e9
                     logit, features = self.model(x, get_features=True)
                     if self.weight_option == "loss":
                         total_loss = self.criterion(logit, y)
@@ -891,6 +948,7 @@ class Ours(ER):
                     else:
                         loss = self.criterion(logit, y)
                     self.total_flops += (len(logit) * 2) / 10e9
+                    '''
             else:
                 logit, features = self.model(x, get_features=True)
                 if self.weight_option == "loss":
@@ -942,7 +1000,7 @@ class Ours(ER):
                 y = y.to(self.device)
                 logit, current_features = self.model(x, get_features=True)
                 
-                self.total_flops += (len(x) * (self.forward_flops + self.backward_flops))
+                self.total_flops += (len(x) * self.forward_flops)
                 
                 if self.ver == "ver3":
                     _, ema_features = self.ema_model(x, get_features=True)
