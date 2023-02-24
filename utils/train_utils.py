@@ -27,9 +27,9 @@ def cycle(iterable):
 
 class DataAugmentation(nn.Module):
 
-    def __init__(self, inp_size, mean, std, T=None) -> None:
+    def __init__(self, inp_size, mean, std) -> None:
         super().__init__()
-        self.randaugmentation = Kornia_Randaugment(T = T)
+        self.randaugmentation = Kornia_Randaugment()
         self.inp_size = inp_size
         self.mean = mean
         self.std = std
@@ -96,10 +96,10 @@ class DataAugmentation(nn.Module):
         return x_out
 
 
-def get_transform(dataset, transform_list, gpu_transform, use_kornia=True, T=None):
+def get_transform(dataset, transform_list, gpu_transform, use_kornia=True):
     mean, std, n_classes, inp_size, _ = get_statistics(dataset=dataset)
     if use_kornia:
-        train_transform = DataAugmentation(inp_size, mean, std, T)
+        train_transform = DataAugmentation(inp_size, mean, std)
     else:
         train_transform = []
         if "cutout" in transform_list:
