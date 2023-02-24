@@ -93,7 +93,10 @@ class Ours(ER):
         self.test_transform = test_transform
         self._supported_layers = ['Linear', 'Conv2d']
         self.target_layer = kwargs["target_layer"]
-        self.freeze_warmup = 100
+        self.freeze_warmup = 500
+        self.grad_dict = {}
+        self.min_p = kwargs["min_p"]
+        self.max_p = kwargs["max_p"]
         # for gradient subsampling
         self.grad_score_per_layer = None 
         # Hyunseo: gradient threshold
@@ -107,7 +110,7 @@ class Ours(ER):
         self.grad_mvar_base = {n: torch.zeros_like(p) for n, p in list(self.model.named_parameters())[:-2] if p.requires_grad and n in target_layers}
         self.grad_cls_score_mavg_base = {n: 0 for n, p in list(self.model.named_parameters())[:-2] if p.requires_grad and n in target_layers}
         self.grad_criterion_base = {n: 0 for n, p in list(self.model.named_parameters())[:-2] if p.requires_grad and n in target_layers}
-        
+        self.grad_dict_base = {n: [] for n, p in list(self.model.named_parameters())[:-2] if p.requires_grad and n in target_layers}
         self.selected_num = 512
         print("keys")
         print(self.grad_mavg_base.keys())
@@ -569,6 +572,7 @@ class Ours(ER):
         self.total_count += 1
     
         self.update_memory(sample, self.total_count)
+
         '''
         # for use validation set
         use_sample = self.online_valid_update(sample)
@@ -585,6 +589,31 @@ class Ours(ER):
                 self.num_updates -= int(self.num_updates)
                 self.update_schedule()
 
+
+    def online_valid_update(self, sample):
+        val_df = pd.DataFrame(self.valid_list, columns=['klass', 'file_name', 'label'])
+
+        # memory_size의 0.01배만큼의 validation size를 갖고 있기 때문에, 확률을 대략 0.02를 곱해준 것
+        do_val = np.random.rand(1) < 0.5
+        if do_val:
+            use_sample=False
+            if len(val_df[val_df["klass"] == sample["klass"]]) >= self.val_per_cls:
+                # 기존에 있던 sample 하나 꺼내서 replace
+                candidate_indices = list(val_df[val_df["klass"] == sample["klass"]].index)
+                target_index = random.choice(candidate_indices)
+                del self.valid_list[target_index]
+            self.valid_list.append(sample)
+        else:
+            use_sample = True
+
+        return use_sample
+
+
+    #def update_correlation(self):
+        
+
+    '''
+    # validation set fixed initially
     def online_valid_update(self, sample):
         val_df = pd.DataFrame(self.valid_list, columns=['klass', 'file_name', 'label'])
         if not self.val_full:
@@ -599,7 +628,9 @@ class Ours(ER):
                 use_sample = True
         else:
             use_sample = True
+
         return use_sample
+    '''
 
     '''
     # offline version valid_update
@@ -684,7 +715,8 @@ class Ours(ER):
     def add_new_class(self, class_name, sample=None):
         print("!!add_new_class seed", self.rnd_seed)
         self.sma_class_loss[len(self.exposed_classes)] = []
-        self.grad_cls_score_mavg[len(self.exposed_classes)] = self.grad_cls_score_mavg_base
+        self.grad_cls_score_mavg[len(self.exposed_classes)] = copy.deepcopy(self.grad_cls_score_mavg_base)
+        self.grad_dict[len(self.exposed_classes)] = copy.deepcopy(self.grad_dict_base)
         self.exposed_classes.append(class_name)
         self.num_learned_class = len(self.exposed_classes)
         prev_weight = copy.deepcopy(self.model.fc.weight.data)
@@ -729,6 +761,9 @@ class Ours(ER):
         autograd_hacks.remove_hooks(self.model)
         autograd_hacks.add_hooks(self.model)
 
+    def make_probability(self, probability, min_p, max_p):
+        return ((max_p-min_p)/(-4))*(probability-2.5)+max_p
+
     def online_train(self, sample, batch_size, n_worker, iterations=1, stream_batch_size=0, sample_num=None):
         total_loss, correct, num_data = 0.0, 0.0, 0.0
         initial_CKA, group1_CKA, group2_CKA, group3_CKA, group4_CKA = 0.0, 0.0, 0.0, 0.0, 0.0
@@ -752,8 +787,9 @@ class Ours(ER):
                     for idx, key in enumerate(keys):
                         probability[idx] = self.grad_score_per_layer[key]
 
-                    probability = (-1/8) * probability + (73/80)
-                    probability = probability.clamp(min=0.0, max = 0.6)
+                    #probability = (-1/8) * probability + (73/80)
+                    probability = self.make_probability(probability, self.min_p, self.max_p)
+                    probability = probability.clamp(min=0.0, max = self.max_p)
                     print("probability")
                     print(probability)
                     self.freeze_with_gradient(sample_num, probability)
@@ -830,7 +866,11 @@ class Ours(ER):
             
             self.optimizer.step()
             self.update_gradstat(sample_num, y)
-            
+
+            '''
+            if sample_num >= 150:
+                self.calculate_covariance()
+            '''
             autograd_hacks.clear_backprops(self.model)
 
             # update ema model
@@ -859,7 +899,7 @@ class Ours(ER):
     def get_backward_flops(self):
         backward_flops = self.backward_flops
         for i in self.freeze_idx:
-            backward_flops -= self.comp_backward_flops[i]
+            backward_flops -= self.comp_backward_flops[i+1]
         return backward_flops
 
     def model_forward(self, x, y, x2=None, y2=None, return_cls_loss=False, loss_balancing_option=None, loss_balancing_weight=None):
@@ -1002,6 +1042,86 @@ class Ours(ER):
         else:
             return features, logit, loss
 
+    def validation(self, sample_num):
+        total_correct, total_num_data, total_loss = 0.0, 0.0, 0.0
+        class_loss = torch.zeros(len(self.exposed_classes))
+        class_count = torch.zeros(len(self.exposed_classes))
+        
+        total_class_num = torch.zeros(len(self.exposed_classes))
+        correct_class_num = torch.zeros(len(self.exposed_classes))
+        
+        correct_l = torch.zeros(self.n_classes)
+        num_data_l = torch.zeros(self.n_classes)
+        
+        label = []
+        current_feature_dict = {}
+        ema_feature_dict = {}
+        
+        self.model.train()
+
+        #with torch.no_grad():
+        for i, data in enumerate(test_loader):
+            x = data["image"]
+            y = data["label"]
+            x = x.to(self.device)
+            y = y.to(self.device)
+            logit, current_features = self.model(x, get_features=True)
+            
+            self.total_flops += (len(x) * self.forward_flops)
+
+            if self.weight_option == "loss" or per_class_loss:
+                loss = criterion(logit, y)
+                if per_class_loss:
+                    for i, l in enumerate(y):
+                        class_loss[l.item()] += loss[i].item()
+                        class_count[l.item()] += 1
+
+                loss = torch.mean(loss)
+            else:
+                loss = criterion(logit, y)
+
+            # backward만 하고 optimizer.step()을 해주면 안됨
+            # then, model이 update 되기 때문
+            loss.backward()
+
+            update_gradstat(sample_num, y)
+
+            pred = torch.argmax(logit, dim=-1)
+            _, preds = logit.topk(self.topk, 1, True, True)
+
+            pred_tensor = preds == y.unsqueeze(1)
+            correct_index = (pred_tensor == 1).nonzero(as_tuple=True)[0]
+            correct_count = Counter(y[correct_index].cpu().numpy())
+            total_class_count = Counter(y.cpu().numpy())
+
+            for key in list(correct_count.keys()):
+                correct_class_num[key] += correct_count[key]
+
+            for key in list(total_class_count.keys()):
+                total_class_num[key] += total_class_count[key]
+
+            total_correct += torch.sum(preds == y.unsqueeze(1)).item()
+            total_num_data += y.size(0)
+
+            xlabel_cnt, correct_xlabel_cnt = self._interpret_pred(y, pred)
+            correct_l += correct_xlabel_cnt.detach().cpu()
+            num_data_l += xlabel_cnt.detach().cpu()
+
+            total_loss += loss.item()
+            label += y.tolist()
+
+
+        avg_acc = total_correct / total_num_data
+        avg_loss = total_loss / len(test_loader)
+        cls_acc = (correct_l / (num_data_l + 1e-5)).numpy().tolist()
+        cls_loss = class_loss.numpy() / class_count.numpy()
+        my_cls_acc = correct_class_num / (total_class_num + 0.001)
+        
+        ret = {"avg_loss": avg_loss, "avg_acc": avg_acc, "cls_acc": cls_acc}
+
+        return 
+
+    '''
     def validation(self, test_loader, criterion, sample_num, per_class_loss=False):
         total_correct, total_num_data, total_loss = 0.0, 0.0, 0.0
         class_loss = torch.zeros(len(self.exposed_classes))
@@ -1082,11 +1202,6 @@ class Ours(ER):
         if self.ver not in ["ver5", "ver6", "ver7", "ver8"]:
             for i in range(5):
                 key_name = "block" + str(i)
-                '''
-                print("len(current_feature_dict[key_name])", len(current_feature_dict[key_name]))
-                for feature in current_feature_dict[key_name]:
-                    print("key_name", key_name,"shape", feature.shape)
-                '''
                 current_feature_dict[key_name] = torch.cat(current_feature_dict[key_name], dim=0)
                 if self.ver == "ver3":
                     ema_feature_dict[key_name] = torch.cat(ema_feature_dict[key_name], dim=0)
@@ -1179,6 +1294,7 @@ class Ours(ER):
             ret = {"avg_loss": avg_loss, "avg_acc": avg_acc, "cls_acc": cls_acc, "cls_loss" : cls_loss, "my_cls_acc" : my_cls_acc}
 
         return ret
+    '''
 
     def evaluation(self, test_loader, criterion, per_class_loss=False):
         total_correct, total_num_data, total_loss = 0.0, 0.0, 0.0
@@ -1301,6 +1417,33 @@ class Ours(ER):
         else:
             self.memory.replace_sample(sample)
 
+    def update_correlation(self):
+        cor_dic = {}
+        for n, p in self.model.named_parameters():
+            if p.requires_grad is True and p.grad is not None:
+                if not p.grad.isnan().any():
+                    for i, y in enumerate(labels):
+                        sub_sampled = p.grad1[i].clone().detach().clamp(-1000, 1000).flatten()[self.selected_mask[n]]
+                        if y not in cor_dic.keys():
+                            cor_dic[y] = [sub_sampled]
+                        else:
+                            cor_dic[y].append(sub_sampled)
+
+        centered_list = []
+        for key in list(cor_dic.keys()):
+            stacked_tensor = torch.stack(cor_dic[key])
+            stacked_tensor -= torch.mean(stacked_tensor, dim=0) # make zero mean
+            stacked_tensor /= torch.norm(stacked_tensor, p=2, dim=1) # make unit vector
+            centered_list.append(stacked_tensor)
+        
+        for i in range(len(cor_list)):
+            for j in range(1, len(cor_list)):
+                cor_i_j = torch.mean(torch.sum(cor_list[i]*cor_list[j], dim=1), dim=0)
+                # [i][j] correlation update
+                selfcorr_map[i][j] = self.grad_ema_ratio * (cor_i_j - self.corr_map[i][j])
+
+
+
     # Hyunseo: call after backward
     def update_gradstat(self, sample_num, labels):
         effective_ratio = (2 - self.grad_ema_ratio) / self.grad_ema_ratio
@@ -1328,6 +1471,8 @@ class Ours(ER):
                             '''
                             ### use sub-sampled gradient ###
                             sub_sampled = p.grad1[i].clone().detach().clamp(-1000, 1000).flatten()[self.selected_mask[n]]
+                            #self.grad_dict[y.item()][n].append(sub_sampled)
+
                             self.grad_mavg[y.item()][n] += self.grad_ema_ratio * (sub_sampled - self.grad_mavg[y.item()][n])
                             self.grad_mavgsq[y.item()][n] += self.grad_ema_ratio * (sub_sampled ** 2 - self.grad_mavgsq[y.item()][n])
                             self.grad_mvar[y.item()][n] = self.grad_mavgsq[y.item()][n] - self.grad_mavg[y.item()][n] ** 2
@@ -1335,7 +1480,7 @@ class Ours(ER):
                                         torch.abs(self.grad_mavg[y.item()][n]) / (torch.sqrt(self.grad_mvar[y.item()][n]) + 1e-10) * np.sqrt(
                                     effective_ratio)).mean().item() 
                             self.grad_cls_score_mavg[y.item()][n] += self.grad_ema_ratio * (self.grad_criterion[y.item()][n] - self.grad_cls_score_mavg[y.item()][n])
-        
+       
         for cls, dic in enumerate(self.grad_criterion):
             self.writer.add_scalars("grad_criterion"+str(cls), dic, sample_num)
         
@@ -1355,4 +1500,18 @@ class Ours(ER):
         
         self.writer.add_scalars("layer_score", self.grad_score_per_layer, sample_num)
         
-            
+        #self.calculate_covariance()
+
+        # gradient 이용하여 class간 correlation coefficient  
+        # class별로 layer별 gradient mean을 이용하면 되려나??
+        # 마지막 layer만 이용하는 방법도 있을 것이다.
+
+    def calculate_covariance(self):
+        last_key = list(self.grad_dict[0].keys())[-1]
+        tensor_list = []
+        for cls in range(len(self.exposed_classes)):
+            tensor_list.append(torch.mean(torch.stack(self.grad_dict[cls][last_key]), dim=0))
+        tensor_list = torch.stack(tensor_list)
+        corr_coeff = torch.corrcoef(tensor_list)
+        print(corr_coeff)
+

@@ -1,7 +1,7 @@
 #/bin/bash
 
 # CIL CONFIG
-NOTE="cifar10_freeze_by_gradient_example" # Short description of the experiment. (WARNING: logs/results with the same note will be overwritten!)
+NOTE="final_cifar10_max_0.5_min_0.1_real_iter1.5" # Short description of the experiment. (WARNING: logs/results with the same note will be overwritten!)
 MODE="ours"
 DATASET="cifar10" # cifar10, cifar100, tinyimagenet, imagenet
 SIGMA=10
@@ -10,7 +10,7 @@ INIT_CLS=100
 GPU_TRANSFORM="--gpu_transform"
 HUMAN_TRAINING="False"
 USE_AMP="--use_amp"
-SEEDS="1"
+SEEDS="1 2 3"
 AVG_PROB="0.4"
 RECENT_RATIO="0.8"
 LOSS_BALANCING_OPTION="reverse_class_weight" #none
@@ -28,15 +28,17 @@ THRESHOLD_COEFF=0.1
 THRESHOLD_POLICY="block"
 UNFREEZE_COEFF=100
 FREEZE_WARMUP=1000
+MAX_P="0.5"
+MIN_P="0.1"
 TARGET_LAYER="last_conv2" # whole_conv2, last_conv2
 
 if [ "$DATASET" == "cifar10" ]; then
-    MEM_SIZE=50000 ONLINE_ITER=1
+    MEM_SIZE=50000 ONLINE_ITER=1.5
     MODEL_NAME="resnet18" VAL_PERIOD=500 EVAL_PERIOD=100
     BATCHSIZE=16; LR=3e-4 OPT_NAME="adam" SCHED_NAME="default" IMP_UPDATE_PERIOD=1
 
 elif [ "$DATASET" == "cifar100" ]; then
-    MEM_SIZE=50000 ONLINE_ITER=0.75
+    MEM_SIZE=50000 ONLINE_ITER=1.2
     MODEL_NAME="resnet18" VAL_PERIOD=500 EVAL_PERIOD=100 
     BATCHSIZE=16; LR=3e-4 OPT_NAME="adam" SCHED_NAME="default" IMP_UPDATE_PERIOD=1
 
@@ -57,10 +59,10 @@ fi
 
 for RND_SEED in $SEEDS
 do
-    CUDA_VISIBLE_DEVICES=6 nohup python main.py --mode $MODE --loss_balancing_option $LOSS_BALANCING_OPTION \
+    CUDA_VISIBLE_DEVICES=4 nohup python main.py --mode $MODE --loss_balancing_option $LOSS_BALANCING_OPTION \
     --dataset $DATASET --use_weight $USE_WEIGHT --klass_train_warmup $KLASS_TRAIN_WARMUP --freeze_warmup $FREEZE_WARMUP\
     --sigma $SIGMA --repeat $REPEAT --init_cls $INIT_CLS --weight_method $WEIGHT_METHOD --target_layer $TARGET_LAYER \
-    --rnd_seed $RND_SEED --weight_option $WEIGHT_OPTION --klass_warmup $KLASS_WARMUP --threshold $THRESHOLD \
+    --rnd_seed $RND_SEED --weight_option $WEIGHT_OPTION --klass_warmup $KLASS_WARMUP --threshold $THRESHOLD --max_p $MAX_P --min_p $MIN_P \
     --model_name $MODEL_NAME --opt_name $OPT_NAME --sched_name $SCHED_NAME --version $VERSION --unfreeze_threshold $UNFREEZE_THRESHOLD \
     --lr $LR --batchsize $BATCHSIZE --recent_ratio $RECENT_RATIO --avg_prob $AVG_PROB --interval $INTERVAL --threshold_coeff $THRESHOLD_COEFF --unfreeze_coeff $UNFREEZE_COEFF \
     --memory_size $MEM_SIZE $GPU_TRANSFORM --online_iter $ONLINE_ITER --curriculum_option $CURRICULUM_OPTION --threshold_policy $THRESHOLD_POLICY \

@@ -125,6 +125,8 @@ def base_parser():
     parser.add_argument("--online_iter", type=float, default=1, help="number of model updates per samples seen.")
 
     # Ours
+    parser.add_argument("--min_p", type=float, default=0.1)
+    parser.add_argument("--max_p", type=float, default=0.6)
     parser.add_argument("--freeze_warmup", type=int, default=100)
     parser.add_argument("--target_layer", type=str, default="whole_conv2")
     parser.add_argument("--use_weight", type=str, default="classwise")
