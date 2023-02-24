@@ -121,11 +121,12 @@ def base_parser():
     parser.add_argument("--val_period", type=int, default=50, help="validation period for true online setup")
     parser.add_argument("--eval_period", type=int, default=100, help="evaluation period for true online setup")
     parser.add_argument("--use_kornia", type=bool, default=True, help="disable kornia")
-
     parser.add_argument("--temp_batchsize", type=int, help="temporary batch size, for true online")
     parser.add_argument("--online_iter", type=float, default=1, help="number of model updates per samples seen.")
 
     # Ours
+    parser.add_argument("--freeze_warmup", type=int, default=100)
+    parser.add_argument("--target_layer", type=str, default="whole_conv2")
     parser.add_argument("--use_weight", type=str, default="classwise")
     parser.add_argument("--max_validation_interval", type=int, default=3000)
     parser.add_argument("--min_validation_interval", type=int, default=300)

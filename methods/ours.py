@@ -6,6 +6,7 @@ import datetime
 import random
 import numpy as np
 import pandas as pd
+import torch.nn.functional as F
 import torch
 import pickle
 import math
@@ -21,9 +22,10 @@ from scipy.stats import chi2, norm
 from flops_counter.ptflops import get_model_complexity_info
 from collections import Counter
 from methods.er_baseline import ER
-from utils.data_loader import ImageDataset, StreamDataset, MemoryDataset, cutmix_data, cutmix_data_two, get_statistics
+from utils.data_loader import ImageDataset, StreamDataset, MemoryDataset, cutmix_data, get_statistics
 from utils.train_utils import select_model, select_optimizer, select_scheduler
 from utils.focal_loss import FocalLoss
+from utils import autograd_hacks
 logger = logging.getLogger()
 #writer = SummaryWriter("tensorboard")
 
@@ -85,17 +87,59 @@ class Ours(ER):
         if self.sched_name == "default":
             self.sched_name = 'const'
         self.lr = kwargs["lr"]
-
+        self.grad_cls_score_mavg = {}
         self.train_transform = train_transform
         self.cutmix = "cutmix" in kwargs["transforms"]
         self.test_transform = test_transform
-
+        self._supported_layers = ['Linear', 'Conv2d']
+        self.target_layer = kwargs["target_layer"]
+        self.freeze_warmup = 100
+        # for gradient subsampling
+        self.grad_score_per_layer = None 
         # Hyunseo: gradient threshold
-        self.grad_mavg = {n: torch.zeros_like(p) for n, p in list(self.model.named_parameters())[:-2] if p.requires_grad}
-        self.grad_mavgsq = {n: torch.zeros_like(p) for n, p in list(self.model.named_parameters())[:-2] if p.requires_grad}
-        self.grad_mvar = {n: torch.zeros_like(p) for n, p in list(self.model.named_parameters())[:-2] if p.requires_grad}
-        self.grad_ema_ratio = 0.001
-        self.grad_criterion = {n: torch.Tensor(0) for n, p in list(self.model.named_parameters())[:-2] if p.requires_grad}
+        if self.target_layer == "whole_conv2":
+            target_layers = ["group1.blocks.block0.conv2.block.0.weight", "group1.blocks.block1.conv2.block.0.weight", "group2.blocks.block0.conv2.block.0.weight", "group2.blocks.block1.conv2.block.0.weight", "group3.blocks.block0.conv2.block.0.weight", "group3.blocks.block1.conv2.block.0.weight", "group4.blocks.block0.conv2.block.0.weight", "group4.blocks.block1.conv2.block.0.weight"]
+        elif self.target_layer == "last_conv2":
+            target_layers = ["group1.blocks.block1.conv2.block.0.weight", "group2.blocks.block1.conv2.block.0.weight", "group3.blocks.block1.conv2.block.0.weight", "group4.blocks.block1.conv2.block.0.weight"]
+            
+        self.grad_mavg_base = {n: torch.zeros_like(p) for n, p in list(self.model.named_parameters())[:-2] if p.requires_grad and n in target_layers}
+        self.grad_mavgsq_base = {n: torch.zeros_like(p) for n, p in list(self.model.named_parameters())[:-2] if p.requires_grad and n in target_layers}
+        self.grad_mvar_base = {n: torch.zeros_like(p) for n, p in list(self.model.named_parameters())[:-2] if p.requires_grad and n in target_layers}
+        self.grad_cls_score_mavg_base = {n: 0 for n, p in list(self.model.named_parameters())[:-2] if p.requires_grad and n in target_layers}
+        self.grad_criterion_base = {n: 0 for n, p in list(self.model.named_parameters())[:-2] if p.requires_grad and n in target_layers}
+        
+        self.selected_num = 512
+        print("keys")
+        print(self.grad_mavg_base.keys())
+        self.selected_mask = {}
+        for key in self.grad_mavg_base.keys():
+            a = self.grad_mavg_base[key].flatten()
+            selected_indices = torch.randperm(len(a))[:self.selected_num]
+            self.selected_mask[key] = selected_indices
+            self.grad_mavg_base[key] = torch.zeros(self.selected_num).to(self.device)
+            self.grad_mavgsq_base[key] = torch.zeros(self.selected_num).to(self.device)
+            self.grad_mvar_base[key] = torch.zeros(self.selected_num).to(self.device)
+            
+            
+        '''
+        for idx, (name, layer) in enumerate(self.model.named_modules()):
+            print(layer.requires_grad)
+            layer_type = self._layer_type(layer)
+            if layer_type not in self._supported_layers:
+                del_name = list(self.grad_mavg_base.keys())[idx]
+                print("del name", del_name)
+                del self.grad_mavg_base[del_name]
+                del self.grad_mavgsq_base[del_name]
+                del self.grad_mvar_base[del_name]
+                del self.grad_criterion_base[del_name]
+        '''
+
+        self.grad_mavg = []
+        self.grad_mavgsq = []
+        self.grad_mvar = []
+        self.grad_criterion = []
+        
+        self.grad_ema_ratio = 0.01
 
         self.klass_train_warmup = kwargs["klass_train_warmup"]
         self.memory_size = kwargs["memory_size"]
@@ -116,7 +160,7 @@ class Ours(ER):
         self.recent_ratio = kwargs["recent_ratio"]
         self.gpu_transform = kwargs["gpu_transform"]
         self.use_kornia = kwargs["use_kornia"]
-        self.use_amp = kwargs["use_amp"]
+        self.use_amp =  False #kwargs["use_amp"]
         self.cls_weight_decay = kwargs["cls_weight_decay"]
         
         if self.use_amp:
@@ -127,7 +171,7 @@ class Ours(ER):
         
         for name, p in self.model.named_parameters():
     	    print(name, p.shape)
-        
+         
         # for reference model
         '''
         self.reference_model = copy.deepcopy(self.model)
@@ -190,6 +234,10 @@ class Ours(ER):
         self.start_time = time.time()
         num_samples = {'cifar10': 50000, 'cifar100': 50000, 'tinyimagenet': 100000, 'imagenet': 1281167}
         self.total_samples = num_samples[self.dataset]
+        autograd_hacks.add_hooks(self.model)
+    
+    def _layer_type(self, layer: nn.Module) -> str:
+        return layer.__class__.__name__
 
     def update_sma_class_loss(self, cls_loss):
 
@@ -227,6 +275,20 @@ class Ours(ER):
                 key_name = "block" + str(i)
                 thresholds.append(np.mean(self.normalized_dict[key_name]) * self.threshold_coeff)
             return np.array(thresholds)
+    
+    def freeze_with_gradient(self, sample_num, probability=None):
+        if sample_num >= self.freeze_warmup:
+            rand_num = np.random.rand(1)
+            freeze_layer_last_index = -1
+            if probability is None:
+                probability = [0.5, 0.25, 0.125, 0.06]
+
+            freeze_layers = []
+            for idx, p in enumerate(probability):
+                if rand_num < p.item():
+                    freeze_layers.append(idx)
+            self.freeze_idx = freeze_layers
+        
 
     def online_validate(self, sample_num, batch_size, n_worker):
         #print("!!validation interval", self.get_validation_interval())
@@ -358,10 +420,31 @@ class Ours(ER):
                 break
         return result
 
+    def unfreeze_layers(self):
+        for name, param in self.model.named_parameters():
+            param.requires_grad = True
+
     def freeze_layers(self):
         for i in self.freeze_idx:
-            self.freeze_layer(i)
+            if self.target_layer == "last_conv2":
+                self.freeze_layer(i)
+            elif self.target_layer == "whole_conv2":
+                self.freeze_layer(i//2, i%2)
 
+    def freeze_layer(self, layer_index, block_index=None):
+        # group(i)가 들어간 layer 모두 freeze
+        if self.target_layer == "last_conv2":
+            group_name = "group" + str(layer_index+1)
+        elif self.target_layer == "whole_conv2":
+            group_name = "group" + str(layer_index+1) + ".blocks.block"+str(block_index)
+
+        print("freeze", group_name)
+        for name, param in self.model.named_parameters():
+            if group_name in name:
+                param.requires_grad = False
+
+
+    '''
     def freeze_layer(self, layer_index):
         if layer_index == 0:
             # initial이 들어간 layer 모두 freeze
@@ -374,13 +457,7 @@ class Ours(ER):
             for name, param in self.model.named_parameters():
                 if group_name in name:
                     param.requires_grad = False
-        
-        '''
-        # freeze 여부 check     
-        for name, param in self.model.named_parameters():
-            print(name, param.requires_grad)
-        '''
-
+     '''
 
     def get_validation_interval(self):
         if len(self.add_new_class_time) <= 1:
@@ -607,6 +684,7 @@ class Ours(ER):
     def add_new_class(self, class_name, sample=None):
         print("!!add_new_class seed", self.rnd_seed)
         self.sma_class_loss[len(self.exposed_classes)] = []
+        self.grad_cls_score_mavg[len(self.exposed_classes)] = self.grad_cls_score_mavg_base
         self.exposed_classes.append(class_name)
         self.num_learned_class = len(self.exposed_classes)
         prev_weight = copy.deepcopy(self.model.fc.weight.data)
@@ -642,6 +720,15 @@ class Ours(ER):
             self.freeze_idx = []
         '''
 
+        self.grad_mavg.append(copy.deepcopy(self.grad_mavg_base))
+        self.grad_mavgsq.append(copy.deepcopy(self.grad_mavgsq_base))
+        self.grad_mvar.append(copy.deepcopy(self.grad_mvar_base))
+        self.grad_criterion.append(copy.deepcopy(self.grad_criterion_base))
+        
+
+        autograd_hacks.remove_hooks(self.model)
+        autograd_hacks.add_hooks(self.model)
+
     def online_train(self, sample, batch_size, n_worker, iterations=1, stream_batch_size=0, sample_num=None):
         total_loss, correct, num_data = 0.0, 0.0, 0.0
         initial_CKA, group1_CKA, group2_CKA, group3_CKA, group4_CKA = 0.0, 0.0, 0.0, 0.0, 0.0
@@ -655,7 +742,25 @@ class Ours(ER):
 
         for i in range(iterations):
             self.model.train()
-            if self.ver == "ver4":
+            
+            if self.ver == "ver9":
+                if self.grad_score_per_layer is None:
+                    self.freeze_with_gradient(sample_num)
+                else:
+                    keys = list(self.grad_score_per_layer.keys())
+                    probability = torch.zeros(len(keys))
+                    for idx, key in enumerate(keys):
+                        probability[idx] = self.grad_score_per_layer[key]
+
+                    probability = (-1/8) * probability + (73/80)
+                    probability = probability.clamp(min=0.0, max = 0.6)
+                    print("probability")
+                    print(probability)
+                    self.freeze_with_gradient(sample_num, probability)
+                
+            if self.ver in ["ver4", "ver5", "ver6", "ver7", "ver9"]:
+                #print("freeze_idx!!")
+                #print(self.freeze_idx)
                 self.freeze_layers()
 
             x = []
@@ -718,41 +823,15 @@ class Ours(ER):
                 else:
                     features, logit, loss = self.model_forward(x, y, loss_balancing_option = self.loss_balancing_option, loss_balancing_weight = cls_weight)
 
-
-            #_, ref_features = self.reference_model(x, get_features=True)
-
-            '''
-            print("features length")
-            print(len(features)) # 5
-            print("features.shape")
-            print(features[0].shape) # [1, 64, 32, 32]
-            '''
-
-            '''
-            features = [feat.reshape(feat.shape[0], feat.shape[1], feat.shape[2]*feat.shape[3]) for feat in features]
-            ref_features = [feat.reshape(feat.shape[0], feat.shape[1], feat.shape[2]*feat.shape[3]) for feat in ref_features]
-            initial_CKA += torch.mean(torch.stack([linear_CKA(features[0][i], ref_features[0][i], self.device) for i in range(len(x))]))
-            group1_CKA += torch.mean(torch.stack([linear_CKA(features[1][i], ref_features[1][i], self.device) for i in range(len(x))]))
-            group2_CKA += torch.mean(torch.stack([linear_CKA(features[2][i], ref_features[2][i], self.device) for i in range(len(x))]))
-            group3_CKA += torch.mean(torch.stack([linear_CKA(features[3][i], ref_features[3][i], self.device) for i in range(len(x))]))
-            group4_CKA += torch.mean(torch.stack([linear_CKA(features[4][i], ref_features[4][i], self.device) for i in range(len(x))]))
-            '''
-            '''
-            group1_CKA = linear_CKA(features[1], ref_features[1], self.device)
-            group2_CKA = linear_CKA(features[2], ref_features[2], self.device)
-            group3_CKA = linear_CKA(features[3], ref_features[3], self.device)
-            group4_CKA = linear_CKA(features[4], ref_features[4], self.device)
-            '''
             _, preds = logit.topk(self.topk, 1, True, True)
-            if self.use_amp:
-                self.scaler.scale(loss).backward()
-                self.scaler.step(self.optimizer)
-                self.scaler.update()
-            else:
-                loss.backward()
-                self.optimizer.step()
-
-            self.update_gradstat(sample_num)
+            
+            loss.backward()
+            autograd_hacks.compute_grad1(self.model)
+            
+            self.optimizer.step()
+            self.update_gradstat(sample_num, y)
+            
+            autograd_hacks.clear_backprops(self.model)
 
             # update ema model
             if self.ver == "ver3":
@@ -771,80 +850,17 @@ class Ours(ER):
             print("total_flops", self.total_flops)
             self.writer.add_scalar(f"train/total_flops", self.total_flops, sample_num)
 
-        '''
-        initial_CKA = linear_CKA(self.reference_model.initial, self.model.initial)
-        group1_CKA = linear_CKA(self.reference_model.group1, self.model.group1)
-        group2_CKA = linear_CKA(self.reference_model.group2, self.model.group2)
-        group3_CKA = linear_CKA(self.reference_model.group3, self.model.group3)
-        group4_CKA = linear_CKA(self.reference_model.group4, self.model.group4)
-        fc_CKA = linear_CKA(self.reference_model.fc, self.model.fc)
-        '''
-        '''
-        weight_difference_dict = {}
-        
-        current_weight_list = []
-        for i in range(1, 5):
-            for name, p in self.model.named_parameters():
-                target_name = "group" + str(i) + ".blocks.block1.conv2.block.1.weight"
-                if target_name == name:
-                    #print("name", name)
-                    current_weight_list.append(p.detach())
-        
-        if self.prev_weight_list is not None:
-            for i in range(0, 4):
-                # Euclidian Distance
-                #dist = torch.cdist(self.prev_weight_list[i].unsqueeze(0), current_weight_list[i].unsqueeze(0), p=2) # 단순비교
-                #dist = torch.cdist(torch.mean(torch.stack(self.prev_weight_list[i]), dim=0).unsqueeze(0), current_weight_list[i].unsqueeze(0), p=2) # moving average
-                
-                # CKA
-                #dist = linear_CKA(torch.mean(torch.stack(self.prev_weight_list[i]), dim=0).unsqueeze(0), current_weight_list[i].unsqueeze(0), self.device)
-                #dist = linear_CKA(self.prev_weight_list[i].unsqueeze(0), current_weight_list[i].unsqueeze(0), self.device)
-                
-                # Cosine Similarity
-                #dist = cos(self.prev_weight_list[i], current_weight_list[i])
-                #dist = self.cos(torch.mean(torch.stack(self.prev_weight_list[i]), dim=0), current_weight_list[i])
-                
-                key_name = "block" + str(i)
-                weight_difference_dict[key_name] = abs(dist.item())
-                print("dist", abs(dist.item()))
-                
-            
-            self.writer.add_scalars(f"train/weight_difference", weight_difference_dict, sample_num)
-        
-        # 단순 비교
-        # self.prev_weight_list = copy.deepcopy(current_weight_list)
-        
-        # moving average
-        self.update_prev_weight(current_weight_list)
-        '''
-        
-        #print('initial CKA: {}, group1 CKA: {}, group2 CKA: {}, group3 CKA: {}, group4 CKA: {}'.format(initial_CKA / iterations, group1_CKA / iterations, group2_CKA / iterations, group3_CKA / iterations, group4_CKA / iterations))
+            if self.ver == "ver9":
+                self.unfreeze_layers()
+                self.freeze_idx = []
 
-        #return total_loss / iterations, correct / num_data, initial_CKA / iterations, group1_CKA / iterations, group2_CKA / iterations, group3_CKA / iterations, group4_CKA / iterations
         return total_loss / iterations, correct / num_data, None, None, None, None, None
 
     def get_backward_flops(self):
         backward_flops = self.backward_flops
-        
         for i in self.freeze_idx:
             backward_flops -= self.comp_backward_flops[i]
-        
         return backward_flops
-
-    def update_prev_weight(self, current_weight_list):
-    
-        if self.prev_weight_list is None:
-            self.prev_weight_list = [] #copy.deepcopy(current_weight_list)
-            for idx, weight in enumerate(current_weight_list):
-                self.prev_weight_list.append([copy.deepcopy(weight)])
-            
-        else:
-            for cls, weight in enumerate(current_weight_list):
-                if len(self.prev_weight_list[cls]) < 5:
-                    self.prev_weight_list[cls].append(copy.deepcopy(weight))
-                else:
-                    self.prev_weight_list[cls].pop(0)
-                    self.prev_weight_list[cls].append(copy.deepcopy(weight))
 
     def model_forward(self, x, y, x2=None, y2=None, return_cls_loss=False, loss_balancing_option=None, loss_balancing_weight=None):
         '''
@@ -860,13 +876,18 @@ class Ours(ER):
         '''
         if loss_balancing_option == "reverse_class_weight":    
             loss_balancing_weight = 1 / np.array(loss_balancing_weight)
+            
+            #for softmax
+            #loss_balancing_weight = F.softmax(torch.DoubleTensor(loss_balancing_weight), dim=0)
+            
+            #for weight sum 
             loss_balancing_weight /= np.sum(loss_balancing_weight)
         elif loss_balancing_option == "class_weight": # default
             pass
         elif loss_balancing_option == "none":
             loss_balancing_weight=None
             pass
-
+        
         do_cutmix = self.cutmix and np.random.rand(1) < 0.5
         
         if do_cutmix:
@@ -1281,16 +1302,57 @@ class Ours(ER):
             self.memory.replace_sample(sample)
 
     # Hyunseo: call after backward
-    def update_gradstat(self, sample_num):
+    def update_gradstat(self, sample_num, labels):
         effective_ratio = (2 - self.grad_ema_ratio) / self.grad_ema_ratio
         for n, p in self.model.named_parameters():
-            if n in self.grad_mavg:
+            if n in self.grad_mavg[0]:
                 if p.requires_grad is True and p.grad is not None:
                     if not p.grad.isnan().any():
+                        '''
                         self.grad_mavg[n] += self.grad_ema_ratio * (p.grad.clone().detach().clamp(-1000, 1000) - self.grad_mavg[n])
                         self.grad_mavgsq[n] += self.grad_ema_ratio * (p.grad.clone().detach().clamp(-1000, 1000) ** 2 - self.grad_mavgsq[n])
                         self.grad_mvar[n] = self.grad_mavgsq[n] - self.grad_mavg[n] ** 2
                         self.grad_criterion[n] = (
                                     torch.abs(self.grad_mavg[n]) / (torch.sqrt(self.grad_mvar[n]) + 1e-10) * np.sqrt(
-                                effective_ratio * self.batch_size)).mean().item()
-        self.writer.add_scalars("grad_criterion", self.grad_criterion, sample_num)
+                                effective_ratio)).mean().item()
+                        '''
+                        for i, y in enumerate(labels):
+                            ''' 
+                            ### use whole gradient ###
+                            self.grad_mavg[y.item()][n] += self.grad_ema_ratio * (p.grad1[i].clone().detach().clamp(-1000, 1000) - self.grad_mavg[y.item()][n])
+                            self.grad_mavgsq[y.item()][n] += self.grad_ema_ratio * (p.grad1[i].clone().detach().clamp(-1000, 1000) ** 2 - self.grad_mavgsq[y.item()][n])
+                            self.grad_mvar[y.item()][n] = self.grad_mavgsq[y.item()][n] - self.grad_mavg[y.item()][n] ** 2
+                            self.grad_criterion[y.item()][n] = (
+                                        torch.abs(self.grad_mavg[y.item()][n]) / (torch.sqrt(self.grad_mvar[y.item()][n]) + 1e-10) * np.sqrt(
+                                    effective_ratio)).mean().item() 
+                            '''
+                            ### use sub-sampled gradient ###
+                            sub_sampled = p.grad1[i].clone().detach().clamp(-1000, 1000).flatten()[self.selected_mask[n]]
+                            self.grad_mavg[y.item()][n] += self.grad_ema_ratio * (sub_sampled - self.grad_mavg[y.item()][n])
+                            self.grad_mavgsq[y.item()][n] += self.grad_ema_ratio * (sub_sampled ** 2 - self.grad_mavgsq[y.item()][n])
+                            self.grad_mvar[y.item()][n] = self.grad_mavgsq[y.item()][n] - self.grad_mavg[y.item()][n] ** 2
+                            self.grad_criterion[y.item()][n] = (
+                                        torch.abs(self.grad_mavg[y.item()][n]) / (torch.sqrt(self.grad_mvar[y.item()][n]) + 1e-10) * np.sqrt(
+                                    effective_ratio)).mean().item() 
+                            self.grad_cls_score_mavg[y.item()][n] += self.grad_ema_ratio * (self.grad_criterion[y.item()][n] - self.grad_cls_score_mavg[y.item()][n])
+        
+        for cls, dic in enumerate(self.grad_criterion):
+            self.writer.add_scalars("grad_criterion"+str(cls), dic, sample_num)
+        
+        # just avg_mean score
+        #grad_score_per_layer = {layer: np.mean([self.grad_cls_score_mavg[klass][layer] for klass in range(len(self.exposed_classes))]) for layer in list(self.grad_cls_score_mavg[0].keys())}
+        
+        # just avg_mean score
+        label_count = torch.zeros(len(self.exposed_classes)).to(self.device)
+        total_label_count = len(labels)
+        for label in labels:
+            label_count[label.item()] += 1
+        label_ratio = label_count / total_label_count
+            
+        #grad_score_per_layer = {layer: np.mean([self.grad_cls_score_mavg[klass][layer] for klass in range(len(self.exposed_classes))]) for layer in list(self.grad_cls_score_mavg[0].keys())}
+        # just random 보다는 현재에 대해서 수렴한다면 freeze가 맞기 때문에 얘는 greedy하게 현재에 focus를 맞춰주자
+        self.grad_score_per_layer = {layer: torch.sum(torch.Tensor([self.grad_cls_score_mavg[klass][layer] for klass in range(len(self.exposed_classes))]).to(self.device) * label_ratio).item() for layer in list(self.grad_cls_score_mavg[0].keys())}
+        
+        self.writer.add_scalars("layer_score", self.grad_score_per_layer, sample_num)
+        
+            

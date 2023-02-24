@@ -366,81 +366,6 @@ class MemoryDataset(Dataset):
 
     def __len__(self):
         return len(self.images)
-
-    def get_difficulty(self, num_ops, cls_magnitude):
-        return (cls_magnitude - 1) # for same ops
-        # return 9 * (num_ops-2) + (cls_magnitude - 1) #for diff ops
-
-    def get_ratio(self, y):
-        
-        cls_num_ops = self.transform_gpu.get_cls_num_ops()
-        cls_magnitudes = self.transform_gpu.get_cls_magnitude()
-        
-        # num_ops 2 magnitude 2 일때 딱 0.25가 나오도록
-        # min_magn = 1, max_magni=9
-        # min_ops 2 max_ops 3
-        # min_prob = 0.3  max_prob = 0.7
-        total_prob = 0.0
-        prob_list = np.linspace(0.3, 0.8, 9)
-        
-        for label in y:
-            # difficulty 올라갈수록 cutmix probability도 높여주기
-            if label >= len(cls_magnitudes):
-                total_prob += 0.3 # base prob이 0.3이므로
-            else:
-                total_prob += prob_list[self.get_difficulty(cls_num_ops[label], cls_magnitudes[label])]
-                
-        avg_prob = total_prob / len(y)
-        
-        print("y")
-        print(y)
-        print("avg_prob")
-        print(avg_prob)
-        return avg_prob
-        
-    '''
-    def get_ratio(self, y):
-
-        batch_loss = 0.0
-        real_count = 0
-        for cls in y:
-            if self.usage_cnt[cls] > self.klass_train_warmup and self.cls_loss[cls] is not None: # 초반 부분에는 Loss가 너무 클 수 있기 때문에
-                batch_loss += self.cls_loss[cls]
-                real_count += 1
-        
-        if real_count == 0:
-            x = 1
-        else:
-            avg_loss = batch_loss / real_count
-            
-            # 단순히 total_avg_loss 평균
-            # total_avg_loss = np.mean(self.cls_loss)
-            
-            # cls_count별로 avg loss weight sum
-            total_count = sum(self.cls_count)
-            total_avg_loss = 0.0
-            for klass, loss in enumerate(self.cls_loss):
-                if loss is not None:
-                    total_avg_loss += loss * (self.cls_count[klass]/total_count)
-            
-            
-            x = avg_loss / total_avg_loss
-            print("avg_loss", avg_loss, "total_avg_loss", total_avg_loss)
-        
-        if x<=0:
-            x=0
-        elif x>=2:
-            x=2
-        
-        #if x<= 1:
-        #    y = 0.5*x**2 -x + 1
-        #else:
-        #    y = -0.5*(x-1)**2 + 0.5
-        
-        y = 0.5 * x
-        #print("y", y)
-        return y
-    '''
     
     def add_new_class(self, cls_list, sample=None):
         self.cls_list = cls_list
@@ -578,12 +503,6 @@ class MemoryDataset(Dataset):
             if count is not None:
                 self.counts.append(count)
 
-            # for twf
-            if logit is not None:
-                self.logits.append(logit)
-                self.attention_maps.append(attention_map)
-                self.tasks.append(task)
-
             if self.save_test == 'gpu':
                 self.device_img.append(self.test_transform(img).to(self.device).unsqueeze(0))
             elif self.save_test == 'cpu':
@@ -621,12 +540,6 @@ class MemoryDataset(Dataset):
             self.labels[idx] = self.cls_list.index(sample['klass'])
             self.sample_weight[idx] = 1
             self.losses[idx] = 0.1
-            
-            # for twf
-            if logit is not None:
-                self.logits[idx] = logit
-                self.attention_map[idx] = attention_map
-                self.tasks[idx] = task
 
             if count is not None:
                 self.counts[idx] = count
@@ -757,6 +670,8 @@ class MemoryDataset(Dataset):
                 cls_weight.append(equal_prob)
             '''
         
+        #elif weight_method == "grad_based":   
+        
         if self.weight_option == "softmax" or "loss":
             weight_tensor = torch.DoubleTensor(cls_weight)
             cls_weight = F.softmax(weight_tensor, dim=0)
@@ -875,27 +790,18 @@ class MemoryDataset(Dataset):
             
         
     @torch.no_grad()
-    def get_batch(self, batch_size, stream_batch_size=0, use_weight=None, transform=None, twf=False, recent_ratio=None, exp_weight=False, prev_batch_index=None, weight_method=None, n_class=None, avg_prob=None, class_cutmix=False, class_loss=None):
+    def get_batch(self, batch_size, stream_batch_size=0, use_weight=None, transform=None, recent_ratio=None, exp_weight=False, weight_method=None, class_loss=None):
 
         assert batch_size >= stream_batch_size
         stream_batch_size = min(stream_batch_size, len(self.stream_images))
         batch_size = min(batch_size, stream_batch_size + len(self.images))
         memory_batch_size = batch_size - stream_batch_size
-        cutmix_indices = None
         
         if memory_batch_size > 0:
             if use_weight == "classwise":
                 weight = np.zeros(memory_batch_size)
                 indices = np.zeros(memory_batch_size)
-                cutmix_indices = np.array([-1 for _ in range(memory_batch_size)])
                 cls_weight = self.classwise_get_weight(weight_method, memory_batch_size)
-
-                if class_cutmix:
-                    k = -1 * n_class * np.log(avg_prob)
-                    data_mix_standard = np.exp(-2*k * cls_weight)
-                    rand_num = np.random.rand(1)
-                    data_mix = [True if rand_num < standard else False for standard in data_mix_standard.numpy()]
-
                 
                 # class별로 구간을 나누고 각 klass에 해당하는 sample들을 채우기
                 selected_place = random.choices(range(len(self.cls_times)), k=memory_batch_size, weights=cls_weight) # klass가 몇개 select되는지 자리 배정
@@ -903,71 +809,43 @@ class MemoryDataset(Dataset):
                 for place in list(set(selected_place)):
                     place_index = np.where(place == np.array(selected_place))[0]
                     klass_index = np.where(place == np.array(self.labels))[0]
-                    do_cutmix=False
 
                     if len(place_index) > len(klass_index): # 자리가 더 많은 것
                         klass_selected_index = random.sample(list(klass_index), len(klass_index))
                         klass_selected_index.extend(random.sample(range(len(self.images)), len(place_index) - len(klass_index)))
                         
-                    else: # sample이 더 많은 것
-                        if not class_cutmix:
-                            sample_weight = self.samplewise_get_weight(weight_method=weight_method, indices=klass_index)
-                            klass_selected_index = np.random.choice(list(klass_index), size=len(place_index), replace=False, p=sample_weight)
-                        else: 
-                            # sample_count 기반
-                            sample_weight = self.samplewise_get_weight(weight_method=weight_method, indices=klass_index)
-                            print("self.class_usage_cnt[place]", self.class_usage_cnt[place], "self.klass_warmup", self.klass_warmup)
-                            if 2*len(place_index) <= len(klass_index) and data_mix[place] and self.class_usage_cnt[place] > self.klass_warmup:
-                                total_selected_index = np.random.choice(list(klass_index), size=2*len(place_index), replace=False, p=sample_weight)
-                                klass_selected_index = total_selected_index[:len(place_index)]
-                                cutmix_selected_index = total_selected_index[len(place_index):]
-                                do_cutmix=True
-                            else:
-                                klass_selected_index = np.random.choice(list(klass_index), size=len(place_index), replace=False, p=sample_weight)
+                        # 이때는 loss_balancing 하면 안됨
+                        # (자기한테 배정된 자리도 다 못채우므로)
                         
+                    else: # sample이 더 많은 것
+                        sample_weight = self.samplewise_get_weight(weight_method=weight_method, indices=klass_index)
+                        klass_selected_index = np.random.choice(list(klass_index), size=len(place_index), replace=False, p=sample_weight)
+                        
+                        '''
+                        # sample_count 기반
+                        sample_weight = self.samplewise_get_weight(weight_method=weight_method, indices=klass_index)
+                        print("self.class_usage_cnt[place]", self.class_usage_cnt[place], "self.klass_warmup", self.klass_warmup)
+                        if 2*len(place_index) <= len(klass_index) and data_mix[place] and self.class_usage_cnt[place] > self.klass_warmup:
+                            total_selected_index = np.random.choice(list(klass_index), size=2*len(place_index), replace=False, p=sample_weight)
+                            klass_selected_index = total_selected_index[:len(place_index)]
+                        else:
+                            klass_selected_index = np.random.choice(list(klass_index), size=len(place_index), replace=False, p=sample_weight)
+                        '''
                     
                     for i, index in enumerate(place_index):
                         indices[index] = klass_selected_index[i]
-                        if do_cutmix:
-                            cutmix_indices[index] = cutmix_selected_index[i]
                         weight[index] = cls_weight[place]
 
                     # cls 기반 같은 class끼리 cutmix
                     # 너무 적게 뽑히는 class의 경우 걔로 인해서 좌지우지 될 수 있기 때문
 
                 indices = indices.astype('int64')
-                cutmix_indices = cutmix_indices.astype('int64')
                 
             elif use_weight == "samplewise":
                 weight = self.samplewise_get_weight(weight_method=weight_method)
                 indices = np.random.choice(range(len(self.images)), size=memory_batch_size, replace=False, p=weight)
                 
             else:
-                '''
-                if prev_batch_index is not None:
-                    indices = np.zeros_like(prev_batch_index)
-                    cand_dict = {}
-                    cand_dict_index = {}
-                    for i, index in enumerate(prev_batch_index):
-                        target_i = self.labels[index]
-                        
-                        if target_i not in cand_dict.keys():
-                            candidate_index = np.where(target_i == np.array(self.labels))[0]
-                            cand_dict[target_i] = candidate_index
-                            cand_dict_index[target_i] = [i]
-                        else:
-                            cand_dict_index[target_i].append(i)
-                        
-                    keys = list(set(list(cand_dict.keys())))
-                    for key in keys:
-                        candidate_index = cand_dict[key]
-                        candidate_index_position = cand_dict_index[key]
-                        indexes = np.random.choice(candidate_index, size=len(candidate_index_position), replace=False)
-                        for i, index in enumerate(indexes):
-                            indices[candidate_index_position[i]] = index
-                    
-                else:       
-                '''
                 indices = np.random.choice(range(len(self.images)), size=memory_batch_size, replace=False)
         
             # batch 내 select된 class를 count에 반영
@@ -986,11 +864,8 @@ class MemoryDataset(Dataset):
                 self.class_usage_cnt[self.stream_labels[i]] += 1
 
         data = dict()
-        buf_data = dict()
         lam = None
         images = []
-        cutmix_images = []
-        cutmix_index = []
         labels = []
         use_cnt = []
         logits = []
@@ -1013,48 +888,10 @@ class MemoryDataset(Dataset):
                     use_cnt.append(self.usage_cnt[i])
                     self.usage_cnt[i] += 1
 
-                if class_cutmix and cutmix_indices is not None:
-                    for index, i in enumerate(cutmix_indices):
-                        if i != -1:
-                            cutmix_images.append(self.images[i])
-                            cutmix_index.append(index)
-
             images = torch.stack(images).to(self.device)
-            
-            '''
-            ### augmentation magnitude curriculum learning ###
-            if self.use_human_training and self.cls_loss[0] is not None:
-                #images = self.transform_gpu(images, use_cnt)
-                images = self.transform_gpu(images, labels)
-                if len(cutmix_images) != 0:
-                    cutmix_images = torch.stack(cutmix_images).to(self.device)
-                    cutmix_images = self.transform_gpu(cutmix_images, labels)
-            else:
-                images = self.transform_gpu(images)
-                if len(cutmix_images) != 0:
-                    cutmix_images = torch.stack(cutmix_images).to(self.device)
-                    cutmix_images = self.transform_gpu(cutmix_images)
-            '''
-            
             # for curriculum learning
             images = self.transform_gpu(images, labels)
-            '''
-            ### augmentation magnitude curriculum learning ###
-            if self.use_human_training and self.cls_loss[0] is not None:
-                #images = self.transform_gpu(images, use_cnt)
-                images = self.transform_gpu(images, labels)
-                if class_cutmix and len(cutmix_images) != 0:
-                    cutmix_images = torch.stack(cutmix_images).to(self.device)
-                    cutmix_images = self.transform_gpu(cutmix_images, labels)
-            else:
-                images = self.transform_gpu(images)
-                if class_cutmix and len(cutmix_images) != 0:
-                    cutmix_images = torch.stack(cutmix_images).to(self.device)
 
-            ### cutmix for less selected class ### 
-            if class_cutmix and len(cutmix_images) != 0:
-                images, lam = cutmix_klass_data(images, cutmix_images, torch.LongTensor(cutmix_index))
-            '''
         else:
             if stream_batch_size > 0:
                 for i in stream_indices:
@@ -1082,12 +919,6 @@ class MemoryDataset(Dataset):
                             images.append(transform(self.images[i].to(self.device)))
                         else:
                             images.append(transform(self.images[i]))
-
-                    if twf:
-                        d.append(self.buf_transform(self.images[i].cpu(), self.buf_attention_maps[i]))
-                        logits.append(self.logits[i])
-                        task_ids.append(self.tasks[i])
-
 
                     use_cnt.append(self.usage_cnt[i] / mean_usage)
                     labels.append(self.labels[i])
@@ -1788,44 +1619,6 @@ def get_statistics(dataset: str):
         in_channels[dataset],
     )
 
-
-# from https://github.com/drimpossible/GDumb/blob/74a5e814afd89b19476cd0ea4287d09a7df3c7a8/src/utils.py#L102:5
-def cutmix_data_two(x, y, x2, y2, alpha=1.0, cutmix_prob=0.5, z=None):
-    assert alpha > 0
-    # generate mixed sample
-    lam = np.random.beta(alpha, alpha)
-
-    batch_size = x.size()[0]
-    #index = torch.randperm(batch_size)
-
-    '''
-    if torch.cuda.is_available():
-        index = index.cuda()
-    '''
-    y_a, y_b = y, y2
-    bbx1, bby1, bbx2, bby2 = rand_bbox(x.size(), lam)
-    x[:, :, bbx1:bbx2, bby1:bby2] = x2[:, :, bbx1:bbx2, bby1:bby2]
-
-    # adjust lambda to exactly match pixel ratio
-    lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (x.size()[-1] * x.size()[-2]))
-    if z is None:
-        return x, y_a, y_b, lam
-    else:
-        return x, y_a, y_b, lam, z_a, z_b
-
-def cutmix_klass_data(x, cutmix_x, index, alpha=1.0, z=None):
-    assert alpha > 0
-    # generate mixed sample
-    lam = np.random.beta(alpha, alpha)
-    if torch.cuda.is_available():
-        index = index.cuda()
-    bbx1, bby1, bbx2, bby2 = rand_bbox(x.size(), lam)
-    x[index, :, bbx1:bbx2, bby1:bby2] = cutmix_x[:, :, bbx1:bbx2, bby1:bby2]
-
-    # adjust lambda to exactly match pixel ratio
-    lam = 1 - ((bbx2 - bbx1) * (bby2 - bby1) / (x.size()[-1] * x.size()[-2]))
-    
-    return x, lam
 
 # from https://github.com/drimpossible/GDumb/blob/74a5e814afd89b19476cd0ea4287d09a7df3c7a8/src/utils.py#L102:5
 def cutmix_data(x, y, alpha=1.0, cutmix_prob=0.5, z=None):
