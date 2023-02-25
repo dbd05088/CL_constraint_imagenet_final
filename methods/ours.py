@@ -754,6 +754,20 @@ class Ours(ER):
             self.freeze_idx = []
         '''
 
+        # initialize with mean
+        if len(self.grad_mavg) >= 2:    
+            self.grad_mavg_base = {key: torch.mean(torch.stack([self.grad_mavg[kls][key] for kls in range(len(self.grad_mavg))]), dim=0) for key in self.grad_mavg_base.keys()}
+            self.grad_mavgsq_base = {key: torch.mean(torch.stack([self.grad_mavgsq[kls][key] for kls in range(len(self.grad_mavg))]), dim=0) for key in self.grad_mavgsq_base.keys()}
+            self.grad_mvar_base = {key: torch.mean(torch.stack([self.grad_mvar[kls][key] for kls in range(len(self.grad_mavg))]), dim=0) for key in self.grad_mvar_base.keys()}
+            
+            '''
+            print("checking!!")
+            last_key = list(self.grad_mavg_base.keys())[-1]
+            print(self.grad_mavg[0][last_key][:10])
+            print(self.grad_mavg[1][last_key][:10])
+            print(self.grad_mavg_base[last_key][:10])
+            '''
+
         self.grad_mavg.append(copy.deepcopy(self.grad_mavg_base))
         self.grad_mavgsq.append(copy.deepcopy(self.grad_mavgsq_base))
         self.grad_mvar.append(copy.deepcopy(self.grad_mvar_base))
@@ -1521,8 +1535,7 @@ class Ours(ER):
         #self.grad_score_per_layer = {layer: torch.sum(torch.Tensor([self.grad_cls_score_mavg[klass][layer] for klass in range(len(self.exposed_classes))]).to(self.device) * label_ratio).item() for layer in list(self.grad_cls_score_mavg[0].keys())}
         
         ### current scoring 방식 ### 
-        self.grad_score_per_layer = {layer: torch.sum(torch.Tensor([self.grad_cls_score_mavg[klass][layer] for klass in range(len(self.exposed_classes))]).to(self.device) * label_ratio).item() for layer in list(self.grad_cls_score_mavg[0].keys())}
-        
+        self.grad_score_per_layer = {layer: torch.sum(torch.Tensor([self.grad_criterion[klass][layer] for klass in range(len(self.exposed_classes))]).to(self.device) * label_ratio).item() for layer in list(self.grad_criterion[0].keys())}
         self.writer.add_scalars("layer_score", self.grad_score_per_layer, sample_num)
         
         #self.calculate_covariance()
