@@ -7,6 +7,7 @@ import random
 import numpy as np
 import pandas as pd
 import torch.nn.functional as F
+from scipy import stats
 import torch
 import pickle
 import math
@@ -67,8 +68,6 @@ class Ours(ER):
         self.weight_method = kwargs["weight_method"]
         self.cos = nn.CosineSimilarity(dim=0, eps=1e-6)
         self.prev_weight_list = None
-        self.max_validation_interval = kwargs["max_validation_interval"]
-        self.min_validation_interval = kwargs["min_validation_interval"]
         self.sigma = kwargs["sigma"]
         self.threshold = kwargs["threshold"]
         self.unfreeze_threshold = kwargs["unfreeze_threshold"]
@@ -437,9 +436,9 @@ class Ours(ER):
     def freeze_layer(self, layer_index, block_index=None):
         # group(i)가 들어간 layer 모두 freeze
         if self.target_layer == "last_conv2":
-            group_name = "group" + str(layer_index+1)
+            group_name = "group" + str(layer_index)
         elif self.target_layer == "whole_conv2":
-            group_name = "group" + str(layer_index+1) + ".blocks.block"+str(block_index)
+            group_name = "group" + str(layer_index) + ".blocks.block"+str(block_index)
 
         print("freeze", group_name)
         for name, param in self.model.named_parameters():
@@ -569,17 +568,18 @@ class Ours(ER):
         else:
             self.writer.add_scalar(f"train/add_new_class", 0, sample_num)
 
+        # for non-using validation set
         self.total_count += 1
-    
         self.update_memory(sample, self.total_count)
-
+        
         '''
-        # for use validation set
+        # for using validation set
         use_sample = self.online_valid_update(sample)
         if use_sample:
+            self.total_count += 1
             self.update_memory(sample, self.total_count)
         '''
-
+        
         self.num_updates += self.online_iter
         if self.num_updates >= 1:
             if len(self.memory)>0:
@@ -601,15 +601,17 @@ class Ours(ER):
                 # 기존에 있던 sample 하나 꺼내서 replace
                 candidate_indices = list(val_df[val_df["klass"] == sample["klass"]].index)
                 target_index = random.choice(candidate_indices)
+                
+                # validation에서 제거하는 대신 training set으로 활용
+                self.total_count+=1
+                self.update_memory(self.valid_list[target_index], self.total_count)
+                
                 del self.valid_list[target_index]
             self.valid_list.append(sample)
         else:
             use_sample = True
 
         return use_sample
-
-
-    #def update_correlation(self):
         
 
     '''
@@ -757,12 +759,32 @@ class Ours(ER):
         self.grad_mvar.append(copy.deepcopy(self.grad_mvar_base))
         self.grad_criterion.append(copy.deepcopy(self.grad_criterion_base))
         
-
         autograd_hacks.remove_hooks(self.model)
         autograd_hacks.add_hooks(self.model)
+        
+        '''
+        ### update similarity map ###
+        if len(self.corr_map) > 1:
+            total_corr = 0.0
+            total_corr_count = 0
+            for i in range(len(self.corr_map)):
+                for j in range(i+1, len(self.corr_map)):
+                    total_corr += self.corr_map[i][j]
+                    total_corr_count += 1
+            self.initial_corr = total_corr / total_corr_count
+        else:
+            self.initial_corr = 0
+        
+        for i in range(len(self.corr_map)):
+            # 모든 class의 avg_corr로 initialize
+            self.corr_map[i].append(self.initial_corr)
+        # 자기 자신은 1로 initialize
+        self.corr_map.append(1)
+        '''
 
-    def make_probability(self, probability, min_p, max_p):
-        return ((max_p-min_p)/(-4))*(probability-2.5)+max_p
+    def make_probability(self, z_score, min_p, max_p):
+        return torch.Tensor(1 - stats.norm.cdf(z_score)).to(self.device)
+        # return ((max_p-min_p)/(-4))*(probability-2.5)+max_p
 
     def online_train(self, sample, batch_size, n_worker, iterations=1, stream_batch_size=0, sample_num=None):
         total_loss, correct, num_data = 0.0, 0.0, 0.0
@@ -899,7 +921,7 @@ class Ours(ER):
     def get_backward_flops(self):
         backward_flops = self.backward_flops
         for i in self.freeze_idx:
-            backward_flops -= self.comp_backward_flops[i+1]
+            backward_flops -= self.comp_backward_flops[i]
         return backward_flops
 
     def model_forward(self, x, y, x2=None, y2=None, return_cls_loss=False, loss_balancing_option=None, loss_balancing_weight=None):
@@ -1084,8 +1106,8 @@ class Ours(ER):
             # then, model이 update 되기 때문
             loss.backward()
 
-            update_gradstat(sample_num, y)
-
+            self.update_gradstat(sample_num, y)
+            
             pred = torch.argmax(logit, dim=-1)
             _, preds = logit.topk(self.topk, 1, True, True)
 
@@ -1430,18 +1452,18 @@ class Ours(ER):
                             cor_dic[y].append(sub_sampled)
 
         centered_list = []
-        for key in list(cor_dic.keys()):
+        key_list = list(cor_dic.keys())
+        for key in key_list:
             stacked_tensor = torch.stack(cor_dic[key])
             stacked_tensor -= torch.mean(stacked_tensor, dim=0) # make zero mean
             stacked_tensor /= torch.norm(stacked_tensor, p=2, dim=1) # make unit vector
             centered_list.append(stacked_tensor)
         
-        for i in range(len(cor_list)):
-            for j in range(1, len(cor_list)):
-                cor_i_j = torch.mean(torch.sum(cor_list[i]*cor_list[j], dim=1), dim=0)
+        for key_i in key_list:
+            for key_j in key_list[1:]:
+                cor_i_j = torch.mean(torch.sum(centered_list[key_i]*centered_list[key_j], dim=1), dim=0)
                 # [i][j] correlation update
-                selfcorr_map[i][j] = self.grad_ema_ratio * (cor_i_j - self.corr_map[i][j])
-
+                self.corr_map[key_i][key_j] = self.grad_ema_ratio * (cor_i_j - self.corr_map[key_i][key_j])
 
 
     # Hyunseo: call after backward
@@ -1477,8 +1499,7 @@ class Ours(ER):
                             self.grad_mavgsq[y.item()][n] += self.grad_ema_ratio * (sub_sampled ** 2 - self.grad_mavgsq[y.item()][n])
                             self.grad_mvar[y.item()][n] = self.grad_mavgsq[y.item()][n] - self.grad_mavg[y.item()][n] ** 2
                             self.grad_criterion[y.item()][n] = (
-                                        torch.abs(self.grad_mavg[y.item()][n]) / (torch.sqrt(self.grad_mvar[y.item()][n]) + 1e-10) * np.sqrt(
-                                    effective_ratio)).mean().item() 
+                                        torch.abs(self.grad_mavg[y.item()][n]) / (torch.sqrt(self.grad_mvar[y.item()][n]) + 1e-10)).mean().item() 
                             self.grad_cls_score_mavg[y.item()][n] += self.grad_ema_ratio * (self.grad_criterion[y.item()][n] - self.grad_cls_score_mavg[y.item()][n])
        
         for cls, dic in enumerate(self.grad_criterion):
@@ -1493,9 +1514,13 @@ class Ours(ER):
         for label in labels:
             label_count[label.item()] += 1
         label_ratio = label_count / total_label_count
-            
+         
+        ### ema scoring 방식 ###   
         #grad_score_per_layer = {layer: np.mean([self.grad_cls_score_mavg[klass][layer] for klass in range(len(self.exposed_classes))]) for layer in list(self.grad_cls_score_mavg[0].keys())}
-        # just random 보다는 현재에 대해서 수렴한다면 freeze가 맞기 때문에 얘는 greedy하게 현재에 focus를 맞춰주자
+        #just random 보다는 현재에 대해서 수렴한다면 freeze가 맞기 때문에 얘는 greedy하게 현재에 focus를 맞춰주자
+        #self.grad_score_per_layer = {layer: torch.sum(torch.Tensor([self.grad_cls_score_mavg[klass][layer] for klass in range(len(self.exposed_classes))]).to(self.device) * label_ratio).item() for layer in list(self.grad_cls_score_mavg[0].keys())}
+        
+        ### current scoring 방식 ### 
         self.grad_score_per_layer = {layer: torch.sum(torch.Tensor([self.grad_cls_score_mavg[klass][layer] for klass in range(len(self.exposed_classes))]).to(self.device) * label_ratio).item() for layer in list(self.grad_cls_score_mavg[0].keys())}
         
         self.writer.add_scalars("layer_score", self.grad_score_per_layer, sample_num)
