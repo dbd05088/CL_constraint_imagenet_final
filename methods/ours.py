@@ -797,7 +797,13 @@ class Ours(ER):
         '''
 
     def make_probability(self, z_score, min_p, max_p):
-        return torch.Tensor(1 - stats.norm.cdf(z_score)).to(self.device)
+        prob = 2*(1 - stats.norm.cdf(z_score))
+        copy_prob = copy.deepcopy(prob)
+        for idx, p in enumerate(prob):
+            if idx==0:
+                continue
+            copy_prob[idx] = copy_prob[idx-1]*prob[idx]
+        return torch.Tensor(copy_prob).to(self.device)
         # return ((max_p-min_p)/(-4))*(probability-2.5)+max_p
 
     def online_train(self, sample, batch_size, n_worker, iterations=1, stream_batch_size=0, sample_num=None):
