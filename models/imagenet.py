@@ -101,21 +101,21 @@ class ResNetBase(nn.Module):
         self.opt = opt
         self.groups = groups
         self.base_width = width_per_group
-        self.conv1block = InitialBlock(
+        self.initial = InitialBlock(
             opt, self.inplanes, kernel_size=7, stride=2, padding=3, bias=False
         )
 
         self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
-        self.layer1 = self._make_layer(
+        self.group1 = self._make_layer(
             opt=opt, block=block, planes=64, blocks=layers[0]
         )
-        self.layer2 = self._make_layer(
+        self.group2 = self._make_layer(
             opt=opt, block=block, planes=128, blocks=layers[1], stride=2
         )
-        self.layer3 = self._make_layer(
+        self.group3 = self._make_layer(
             opt=opt, block=block, planes=256, blocks=layers[2], stride=2
         )
-        self.layer4 = self._make_layer(
+        self.group4 = self._make_layer(
             opt=opt, block=block, planes=512, blocks=layers[3], stride=2
         )
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
@@ -178,13 +178,13 @@ class ResNetBase(nn.Module):
 
     def _forward_impl(self, x, get_feature, get_features):
         # See note [TorchScript super()]
-        x = self.conv1block(x)
+        x = self.initial(x)
         x = self.maxpool(x)
 
-        out1 = self.layer1(x)
-        out2 = self.layer2(out1)
-        out3 = self.layer3(out2)
-        out4 = self.layer4(out3)
+        out1 = self.group1(x)
+        out2 = self.group2(out1)
+        out3 = self.group3(out2)
+        out4 = self.group4(out3)
 
         out5 = self.avgpool(out4)
         feature = torch.flatten(out5, 1)
