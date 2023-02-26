@@ -125,6 +125,9 @@ class ER:
 
         self.writer = SummaryWriter(f'tensorboard/{self.dataset}/{self.note}/seed_{self.rnd_seed}')
 
+    def get_total_flops(self):
+        return self.total_flops
+
     def get_flops_parameter(self):
         self.dataset
         _, _, _, inp_size, inp_channel = get_statistics(dataset=self.dataset)

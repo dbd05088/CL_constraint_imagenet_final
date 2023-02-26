@@ -1,7 +1,7 @@
 #/bin/bash
 
 # CIL CONFIG
-NOTE="final_cifar10_max_0.5_min_0.1_real_iter1.5" # Short description of the experiment. (WARNING: logs/results with the same note will be overwritten!)
+NOTE="ver8_sampling_check_t3" # Short description of the experiment. (WARNING: logs/results with the same note will be overwritten!)
 MODE="ours"
 DATASET="cifar10" # cifar10, cifar100, tinyimagenet, imagenet
 SIGMA=10
@@ -16,11 +16,11 @@ RECENT_RATIO="0.8"
 LOSS_BALANCING_OPTION="reverse_class_weight" #none
 WEIGHT_METHOD="count_important"
 WEIGHT_OPTION="loss"
-USE_WEIGHT="classwise"
+USE_WEIGHT="similarity"
 KLASS_WARMUP="300"
 KLASS_TRAIN_WARMUP="50"
 CURRICULUM_OPTION="class_acc"
-VERSION="ver9"
+VERSION="ver8"
 INTERVAL=5
 THRESHOLD="5e-2"
 UNFREEZE_THRESHOLD="1e-1"
@@ -28,7 +28,7 @@ THRESHOLD_COEFF=0.1
 THRESHOLD_POLICY="block"
 UNFREEZE_COEFF=100
 FREEZE_WARMUP=1000
-MAX_P="0.5"
+MAX_P="1.0"
 MIN_P="0.1"
 TARGET_LAYER="last_conv2" # whole_conv2, last_conv2
 
@@ -59,7 +59,7 @@ fi
 
 for RND_SEED in $SEEDS
 do
-    CUDA_VISIBLE_DEVICES=4 nohup python main.py --mode $MODE --loss_balancing_option $LOSS_BALANCING_OPTION \
+    CUDA_VISIBLE_DEVICES=7 nohup python main.py --mode $MODE --loss_balancing_option $LOSS_BALANCING_OPTION \
     --dataset $DATASET --use_weight $USE_WEIGHT --klass_train_warmup $KLASS_TRAIN_WARMUP --freeze_warmup $FREEZE_WARMUP\
     --sigma $SIGMA --repeat $REPEAT --init_cls $INIT_CLS --weight_method $WEIGHT_METHOD --target_layer $TARGET_LAYER \
     --rnd_seed $RND_SEED --weight_option $WEIGHT_OPTION --klass_warmup $KLASS_WARMUP --threshold $THRESHOLD --max_p $MAX_P --min_p $MIN_P \
