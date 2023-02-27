@@ -126,7 +126,6 @@ class ER:
         self.writer = SummaryWriter(f'tensorboard/{self.dataset}/{self.note}/seed_{self.rnd_seed}')
 
     def get_flops_parameter(self):
-        self.dataset
         _, _, _, inp_size, inp_channel = get_statistics(dataset=self.dataset)
         [forward_mac, backward_mac, params, fc_params, buffers], \
         [initial_forward_mac, initial_backward_mac, initial_params],\

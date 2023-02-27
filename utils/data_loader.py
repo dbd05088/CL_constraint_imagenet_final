@@ -17,8 +17,49 @@ import torch.nn as nn
 from kornia import image_to_tensor, tensor_to_image
 from kornia.geometry.transform import resize
 from utils.augmentations import CustomRandomCrop, CustomRandomHorizontalFlip, DoubleCompose, DoubleTransform
+import torch.multiprocessing as multiprocessing
+
+from utils.data_worker import worker_loop
 
 logger = logging.getLogger()
+
+class MultiProcessLoader():
+    def __init__(self, n_workers, cls_dict, transform, data_dir):
+        self.n_workers = n_workers
+        self.cls_dict = cls_dict
+        self.transform = transform
+        self.result_queues = []
+        self.workers = []
+        self.index_queues = []
+        for i in range(self.n_workers):
+            index_queue = multiprocessing.Queue()
+            index_queue.cancel_join_thread()
+            result_queue = multiprocessing.Queue()
+            result_queue.cancel_join_thread()
+            w = multiprocessing.Process(target=worker_loop, args=(index_queue, result_queue, data_dir, self.transform))
+            w.daemon = True
+            w.start()
+            self.workers.append(w)
+            self.index_queues.append(index_queue)
+            self.result_queues.append(result_queue)
+
+    def load_batch(self, batch):
+        for i in range(self.n_workers):
+            self.index_queues[i].put(batch[len(batch)*i//self.n_workers:len(batch)*(i+1)//self.n_workers])
+
+    def get_batch(self):
+        data = dict()
+        images = []
+        labels = []
+        for i in range(self.n_workers):
+            loaded_samples = self.result_queues[i].get(timeout=10.0)
+            for sample in loaded_samples:
+                images.append(sample["image"])
+                labels.append(self.cls_dict[sample["klass"]])
+        images = torch.stack(images)
+        data['image'] = images
+        data['label'] = torch.LongTensor(labels)
+        return data
 
 def nonzero_indices(bool_mask_tensor):
     # Returns tensor which contains indices of nonzero elements in bool_mask_tensor

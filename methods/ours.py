@@ -122,7 +122,6 @@ class Ours(ER):
             self.grad_mavgsq_base[key] = torch.zeros(self.selected_num).to(self.device)
             self.grad_mvar_base[key] = torch.zeros(self.selected_num).to(self.device)
             
-            
         '''
         for idx, (name, layer) in enumerate(self.model.named_modules()):
             print(layer.requires_grad)
@@ -142,6 +141,12 @@ class Ours(ER):
         self.grad_criterion = []
         
         self.grad_ema_ratio = 0.01
+
+        # Information based freezing
+        self.fisher_ema_ratio = 0.01
+        self.fisher = {n: torch.zeros_like(p) for n, p in list(self.model.named_parameters())[:-2] if p.requires_grad}
+        self.delta = {n: torch.zeros_like(p) for n, p in list(self.model.named_parameters())[:-2] if p.requires_grad}
+        self.cumulative_fisher = []
 
         self.klass_train_warmup = kwargs["klass_train_warmup"]
         self.memory_size = kwargs["memory_size"]
@@ -821,6 +826,12 @@ class Ours(ER):
                 #print(self.freeze_idx)
                 self.freeze_layers()
 
+            if self.ver == "ver10":
+                if self.total_count > 100:
+                    self.get_freeze_idx()
+                    if np.random.rand() > 0.1:
+                        self.freeze_layers()
+
             x = []
             y = []
             x2 = []
@@ -889,6 +900,7 @@ class Ours(ER):
             self.optimizer.step()
             self.update_gradstat(sample_num, y)
 
+            self.calculate_fisher()
             '''
             if sample_num >= 150:
                 self.calculate_covariance()
@@ -912,7 +924,7 @@ class Ours(ER):
             print("total_flops", self.total_flops)
             self.writer.add_scalar(f"train/total_flops", self.total_flops, sample_num)
 
-            if self.ver == "ver9":
+            if self.ver in ["ver9", "ver10"]:
                 self.unfreeze_layers()
                 self.freeze_idx = []
 
@@ -1466,7 +1478,6 @@ class Ours(ER):
                 self.corr_map[key_i][key_j] = self.grad_ema_ratio * (cor_i_j - self.corr_map[key_i][key_j])
 
 
-    # Hyunseo: call after backward
     def update_gradstat(self, sample_num, labels):
         effective_ratio = (2 - self.grad_ema_ratio) / self.grad_ema_ratio
         for n, p in self.model.named_parameters():
@@ -1540,3 +1551,40 @@ class Ours(ER):
         corr_coeff = torch.corrcoef(tensor_list)
         print(corr_coeff)
 
+
+    # Hyunseo : Information based freeezing
+    def calculate_fisher(self):
+        group_fisher = [[], [], [], [], []]
+        for n, p in self.model.named_parameters():
+            if n in self.fisher.keys():
+                if p.requires_grad is True and p.grad is not None:
+                    if not p.grad.isnan().any():
+                        self.delta[n] += self.fisher_ema_ratio * (p.clone().detach() - self.delta[n])
+                        self.fisher[n] += self.fisher_ema_ratio * (p.grad.clone().detach().clamp(-1000, 1000) ** 2 - self.fisher[n])
+                if 'initial' in n:
+                    group_fisher[0].append((self.fisher[n]*(p.clone().detach() - self.delta[n])**2).sum().item())
+                elif 'group1' in n:
+                    group_fisher[1].append((self.fisher[n]*(p.clone().detach() - self.delta[n])**2).sum().item())
+                elif 'group2' in n:
+                    group_fisher[2].append((self.fisher[n]*(p.clone().detach() - self.delta[n])**2).sum().item())
+                elif 'group3' in n:
+                    group_fisher[3].append((self.fisher[n]*(p.clone().detach() - self.delta[n])**2).sum().item())
+                elif 'group4' in n:
+                    group_fisher[4].append((self.fisher[n]*(p.clone().detach() - self.delta[n])**2).sum().item())
+        group_fisher_sum = [sum(fishers) for fishers in group_fisher]
+        self.total_fisher = sum(group_fisher_sum)
+        self.cumulative_fisher = [sum(group_fisher_sum[0:i+1]) for i in range(5)]
+
+    def get_flops_parameter(self):
+        super().get_flops_parameter()
+        self.cumulative_backward_flops = [sum(self.comp_backward_flops[0:i+1]) for i in range(5)]
+        self.total_model_flops = self.forward_flops + self.backward_flops
+
+    def get_freeze_idx(self):
+        freeze_score = []
+        freeze_score.append(1.0)
+        for i in range(5):
+            freeze_score.append(self.total_model_flops/(self.total_model_flops - self.cumulative_backward_flops[i])*(self.total_fisher - self.cumulative_fisher[i])/(self.total_fisher+1e-10))
+        optimal_freeze = np.argmax(freeze_score)
+        print(freeze_score, optimal_freeze)
+        self.freeze_idx = list(range(5))[0:optimal_freeze]
