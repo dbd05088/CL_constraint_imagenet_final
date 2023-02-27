@@ -62,7 +62,7 @@ class MultiProcessLoader():
         images = []
         labels = []
         for i in range(self.n_workers):
-            loaded_samples = self.result_queues[i].get(timeout=10.0)
+            loaded_samples = self.result_queues[i].get(timeout=30.0)
             if loaded_samples is not None:
                 images.append(loaded_samples["image"])
                 labels.append(loaded_samples["label"])
