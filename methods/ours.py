@@ -253,6 +253,13 @@ class Ours(ER):
         num_samples = {'cifar10': 50000, 'cifar100': 50000, 'tinyimagenet': 100000, 'imagenet': 1281167}
         self.total_samples = num_samples[self.dataset]
         autograd_hacks.add_hooks(self.model)
+
+        # comp_backward_flops에 group별로 담으려는 pre-processing
+        '''
+        self.initial_backward_flops = self.comp_backward_flops[0]
+        self.fc_backward_flops = self.comp_backward_flops[-1]
+        self.comp_backward_flops = self.comp_backward_flops[1:-1]
+        '''
     
     def _layer_type(self, layer: nn.Module) -> str:
         return layer.__class__.__name__
@@ -440,18 +447,31 @@ class Ours(ER):
             param.requires_grad = True
 
     def freeze_layers(self):
+        '''
+        if len(self.freeze_idx) > 0:
+            # freeze initial block
+            for name, param in self.model.named_parameters():
+                if "initial" in name:
+                    param.requires_grad = False
+        '''
         for i in self.freeze_idx:
+            if i==0:
+                # freeze initial block
+                for name, param in self.model.named_parameters():
+                    if "initial" in name:
+                        param.requires_grad = False
+                continue
             if self.target_layer == "last_conv2":
-                self.freeze_layer(i)
+                self.freeze_layer(i-1)
             elif self.target_layer == "whole_conv2":
-                self.freeze_layer(i//2, i%2)
+                self.freeze_layer((i-1)//2, (i-1)%2)
 
     def freeze_layer(self, layer_index, block_index=None):
         # group(i)가 들어간 layer 모두 freeze
         if self.target_layer == "last_conv2":
-            group_name = "group" + str(layer_index)
+            group_name = "group" + str(layer_index+1)
         elif self.target_layer == "whole_conv2":
-            group_name = "group" + str(layer_index) + ".blocks.block"+str(block_index)
+            group_name = "group" + str(layer_index+1) + ".blocks.block"+str(block_index)
 
         print("freeze", group_name)
         for name, param in self.model.named_parameters():
@@ -983,7 +1003,7 @@ class Ours(ER):
     def get_backward_flops(self):
         backward_flops = self.backward_flops
         for i in self.freeze_idx:
-            backward_flops -= self.comp_backward_flops[i]
+            backward_flops -= self.comp_backward_flops[i+1]
         return backward_flops
 
     def model_forward(self, x, y, x2=None, y2=None, return_cls_loss=False, loss_balancing_option=None, loss_balancing_weight=None):
@@ -1504,7 +1524,9 @@ class Ours(ER):
     def update_correlation(self, labels):
         cor_dic = {}
         for n, p in self.model.named_parameters():
-            if p.requires_grad is True and p.grad is not None and n in self.target_layers:
+            # 전체 sampling이 아니라 last layer만 이용
+            # TODO whole layer 이용 correlation update
+            if p.requires_grad is True and p.grad is not None and n in self.target_layers[-1]:
                 if not p.grad.isnan().any():
                     for i, y in enumerate(labels):
                         sub_sampled = p.grad1[i].clone().detach().clamp(-1000, 1000).flatten()[self.selected_mask[n]]
@@ -1651,7 +1673,10 @@ class Ours(ER):
 
     def get_flops_parameter(self):
         super().get_flops_parameter()
-        self.cumulative_backward_flops = [sum(self.comp_backward_flops[0:i+1]) for i in range(5)]
+        if self.target_layer == "last_conv2":
+            self.cumulative_backward_flops = [sum(self.comp_backward_flops[0:i+1]) for i in range(5)]
+        elif self.target_layer == "whole_conv2":
+            self.cumulative_backward_flops = [sum(self.comp_backward_flops[0:i+1]) for i in range(9)]
         self.total_model_flops = self.forward_flops + self.backward_flops
 
     def get_freeze_idx(self):
@@ -1665,4 +1690,6 @@ class Ours(ER):
         print("self.cumulative_fisher")
         print(self.cumulative_fisher)
         print(freeze_score, optimal_freeze)
+
+        # 아래 방식은 index 0이 initial_block을 의미
         self.freeze_idx = list(range(5))[0:optimal_freeze]

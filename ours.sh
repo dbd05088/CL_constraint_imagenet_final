@@ -1,7 +1,7 @@
 #/bin/bash
 
 # CIL CONFIG
-NOTE="ver8_sampling_ver2_T_0.5" # Short description of the experiment. (WARNING: logs/results with the same note will be overwritten!)
+NOTE="ver10_flops_check" # Short description of the experiment. (WARNING: logs/results with the same note will be overwritten!)
 MODE="ours"
 DATASET="cifar10" # cifar10, cifar100, tinyimagenet, imagenet
 SIGMA=10
@@ -10,7 +10,7 @@ INIT_CLS=100
 GPU_TRANSFORM="--gpu_transform"
 HUMAN_TRAINING="False"
 USE_AMP="--use_amp"
-SEEDS="1 2 3"
+SEEDS="1"
 AVG_PROB="0.4"
 RECENT_RATIO="0.8"
 LOSS_BALANCING_OPTION="reverse_class_weight" #none
@@ -20,7 +20,7 @@ USE_WEIGHT="similarity"
 KLASS_WARMUP="300"
 KLASS_TRAIN_WARMUP="50"
 CURRICULUM_OPTION="class_acc"
-VERSION="ver8"
+VERSION="ver10"
 INTERVAL=5
 THRESHOLD="5e-2"
 UNFREEZE_THRESHOLD="1e-1"
@@ -33,7 +33,7 @@ MIN_P="0.1"
 TARGET_LAYER="last_conv2" # whole_conv2, last_conv2
 
 if [ "$DATASET" == "cifar10" ]; then
-    MEM_SIZE=50000 ONLINE_ITER=1.5
+    MEM_SIZE=50000 ONLINE_ITER=1
     MODEL_NAME="resnet18" VAL_PERIOD=500 EVAL_PERIOD=100
     BATCHSIZE=16; LR=3e-4 OPT_NAME="adam" SCHED_NAME="default" IMP_UPDATE_PERIOD=1
 
