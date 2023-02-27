@@ -95,7 +95,7 @@ class Ours(ER):
         self.freeze_warmup = 500
         self.grad_dict = {}
         self.corr_map = {}
-        self.T = 3
+        self.T = 0.5
         self.min_p = kwargs["min_p"]
         self.max_p = kwargs["max_p"]
         

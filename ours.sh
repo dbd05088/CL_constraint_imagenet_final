@@ -1,7 +1,7 @@
 #/bin/bash
 
 # CIL CONFIG
-NOTE="ver8_sampling_check_t3" # Short description of the experiment. (WARNING: logs/results with the same note will be overwritten!)
+NOTE="ver8_sampling_ver2_T_0.5" # Short description of the experiment. (WARNING: logs/results with the same note will be overwritten!)
 MODE="ours"
 DATASET="cifar10" # cifar10, cifar100, tinyimagenet, imagenet
 SIGMA=10
@@ -59,7 +59,7 @@ fi
 
 for RND_SEED in $SEEDS
 do
-    CUDA_VISIBLE_DEVICES=7 nohup python main.py --mode $MODE --loss_balancing_option $LOSS_BALANCING_OPTION \
+    CUDA_VISIBLE_DEVICES=4 nohup python main.py --mode $MODE --loss_balancing_option $LOSS_BALANCING_OPTION \
     --dataset $DATASET --use_weight $USE_WEIGHT --klass_train_warmup $KLASS_TRAIN_WARMUP --freeze_warmup $FREEZE_WARMUP\
     --sigma $SIGMA --repeat $REPEAT --init_cls $INIT_CLS --weight_method $WEIGHT_METHOD --target_layer $TARGET_LAYER \
     --rnd_seed $RND_SEED --weight_option $WEIGHT_OPTION --klass_warmup $KLASS_WARMUP --threshold $THRESHOLD --max_p $MAX_P --min_p $MIN_P \

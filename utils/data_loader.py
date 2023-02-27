@@ -789,7 +789,7 @@ class MemoryDataset(Dataset):
     
     def get_similarity_weight(self, sim_matrix):
         weight = torch.Tensor(self.usage_cnt)
-        total_count = sum(self.class_usage_cnt)
+        #total_count = sum(self.class_usage_cnt)
         
         for my_klass, my_klass_count in enumerate(self.class_usage_cnt):
             klass_index = np.where(my_klass == np.array(self.labels))[0]
@@ -805,15 +805,16 @@ class MemoryDataset(Dataset):
                 if sim_matrix[min_klass][max_klass] is None:
                     continue
                 x += (sim_matrix[min_klass][max_klass] * other_class_count)
-                
             weight[klass_index] += x 
+
+        total_count = sum(weight)
         '''
         print("self.labels")
         print(self.labels)
         print("weight")
         print(weight)
         '''
-        weight = torch.exp(-(weight/total_count)/self.T).double()
+        weight = torch.exp(-(weight/total_count)*self.T).double()
         weight = F.softmax(weight, dim=0)
         return weight
             
@@ -909,8 +910,6 @@ class MemoryDataset(Dataset):
             else:
                 indices = np.random.choice(range(len(self.images)), size=memory_batch_size, replace=False)
         
-            print("indices")
-            print(np.array(self.labels)[indices])
             # batch 내 select된 class를 count에 반영
             for i in indices:
                 self.class_usage_cnt[self.labels[i]] += 1
@@ -992,7 +991,8 @@ class MemoryDataset(Dataset):
             images = torch.stack(images)
         
         #if use_weight=="classwise":
-        data['cls_weight'] = weight
+        if use_weight is not None:
+            data['cls_weight'] = weight
         data['counter'] = Counter(labels)
         data['image'] = images
         data['label'] = torch.LongTensor(labels)
