@@ -88,8 +88,39 @@ class Bottleneck(nn.Module):
 
         out = out + identity
         out = self.relu(out)
-
         return out
+
+
+class ResidualBlock(nn.Module):
+    def __init__(self, opt, block, inChannels, outChannels, depth, stride=1):
+        super(ResidualBlock, self).__init__()
+        if stride != 1 or inChannels != outChannels * block.expansion:
+            downsample = ConvBlock(
+                opt=opt,
+                in_channels=inChannels,
+                out_channels=outChannels * block.expansion,
+                kernel_size=1,
+                stride=stride,
+                padding=0,
+                bias=False,
+            )
+        else:
+            downsample = None
+        self.blocks = nn.Sequential()
+        self.blocks.add_module(
+            "block0", block(opt, inChannels, outChannels, stride, downsample)
+        )
+        inChannels = outChannels * block.expansion
+        
+        self.inplanes = outChannels * block.expansion
+        
+        for i in range(1, depth):
+            self.blocks.add_module(
+                "block{}".format(i), block(opt, inChannels, outChannels)
+            )
+
+    def forward(self, x, features=None, get_features=False, detached=False):
+        return self.blocks([x, features, get_features, detached])[:2]
 
 
 class ResNetBase(nn.Module):
@@ -104,8 +135,41 @@ class ResNetBase(nn.Module):
         self.initial = InitialBlock(
             opt, self.inplanes, kernel_size=7, stride=2, padding=3, bias=False
         )
+        '''
+        self.inplanes = planes * block.expansion
+        for _ in range(1, blocks):
+            layers.append(
+                block(
+                    opt=opt,
+                    inplanes=self.inplanes,
+                    planes=planes,
+                    groups=self.groups,
+                    base_width=self.base_width,
+                )
+            )
 
-        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
+        '''
+        self.maxpool = nn.MaxPool2d(kernel_size=3,  stride=2, padding=1)
+        self.group1 = ResidualBlock(opt, block, self.inplanes, 64 * block.expansion, layers[0])
+        self.group2 = ResidualBlock(opt, block, self.inplanes, 128 * block.expansion, layers[1])
+        self.group3 = ResidualBlock(opt, block, self.inplanes, 256 * block.expansion, layers[2])
+        self.group4 = ResidualBlock(opt, block, self.inplanes, 512 * block.expansion, layers[3])
+        '''
+        self.group1 = ResidualBlock(
+            opt, block, 64, 64, num_blocks[0], stride=1
+        )  # For ResNet-S, convert this to 20,20
+        self.group2 = ResidualBlock(
+            opt, block, 64 * block.expansion, 128, num_blocks[1], stride=2
+        )  # For ResNet-S, convert this to 20,40
+        self.group3 = ResidualBlock(
+            opt, block, 128 * block.expansion, 256, num_blocks[2], stride=2
+        )  # For ResNet-S, convert this to 40,80
+        self.group4 = ResidualBlock(
+            opt, block, 256 * block.expansion, 512, num_blocks[3], stride=2
+        )  # For ResNet-S, convert this to 80,160
+        '''
+        
+        '''
         self.group1 = self._make_layer(
             opt=opt, block=block, planes=64, blocks=layers[0]
         )
@@ -118,6 +182,7 @@ class ResNetBase(nn.Module):
         self.group4 = self._make_layer(
             opt=opt, block=block, planes=512, blocks=layers[3], stride=2
         )
+        '''
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         self.dim_out = in_channels = 512 * block.expansion
         self.fc = FinalBlock(opt=opt, in_channels=512 * block.expansion)

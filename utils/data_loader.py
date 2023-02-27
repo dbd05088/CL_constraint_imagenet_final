@@ -1633,8 +1633,8 @@ def get_train_datalist(dataset, sigma, repeat, init_cls, rnd_seed):
     return train_list['stream'], train_list['cls_dict'], train_list['cls_addition']
 
 def get_test_datalist(dataset) -> List:
-    print("test name", f"collections/{dataset}/{dataset}_val.json")
-    return pd.read_json(f"collections/{dataset}/{dataset}_val.json").to_dict(orient="records")
+    print("test name", f"collections/{dataset}/{dataset}_val2.json")
+    return pd.read_json(f"collections/{dataset}/{dataset}_val2.json").to_dict(orient="records")
 
 
 def get_statistics(dataset: str):

@@ -144,9 +144,10 @@ class ResidualBlock(nn.Module):
 
 
 class ResNet(nn.Module):
-    def __init__(self, opt):
+    def __init__(self, opt, model_imagenet=False):
         super(ResNet, self).__init__()
         depth = opt.depth
+        self.model_imagenet = model_imagenet
         if depth in [20, 32, 44, 56, 110, 1202]:
             blocktype, self.nettype = "BasicBlock", "cifar"
         elif depth in [164, 1001]:
@@ -192,9 +193,15 @@ class ResNet(nn.Module):
             assert 1 == 2
 
         self.num_classes = opt.num_classes
-        self.initial = InitialBlock(
-            opt=opt, out_channels=in_planes, kernel_size=3, stride=1, padding=1
-        )
+        if model_imagenet:
+            self.initial = InitialBlock(
+                opt=opt, out_channels=in_planes, kernel_size=7, stride=2, padding=3
+            )            
+            self.maxpool = nn.MaxPool2d(kernel_size=3,  stride=2, padding=1)
+        else:
+            self.initial = InitialBlock(
+                opt=opt, out_channels=in_planes, kernel_size=3, stride=1, padding=1
+            )
         if self.nettype == "cifar":
             self.group1 = ResidualBlock(opt, block, 16, 16, n, stride=1)
             self.group2 = ResidualBlock(
@@ -235,6 +242,9 @@ class ResNet(nn.Module):
         last_layer_features = []
         features = []
         out_init = self.initial(x)
+        if self.model_imagenet:
+            out_init = self.maxpool(out_init)
+        
         if get_features:
             features.append(out_init)
             #print("len0", len(last_layer_features))
