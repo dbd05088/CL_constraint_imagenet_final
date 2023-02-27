@@ -67,8 +67,6 @@ def base_parser():
     parser.add_argument("--sched_name", type=str, default="default", help="Scheduler name")
     parser.add_argument("--batchsize", type=int, default=16, help="batch size")
 
-    parser.add_argument("--n_worker", type=int, default=0, help="The number of workers")
-
     parser.add_argument("--lr", type=float, default=0.05, help="learning rate")
     parser.add_argument(
         "--init_model",
@@ -92,6 +90,14 @@ def base_parser():
         "--f_period", type=int, default=10000, help="Period for measuring forgetting"
     )
 
+    # CL_Loader
+    parser.add_argument("--n_worker", type=int, default=4, help="The number of workers")
+    parser.add_argument("--future_steps", type=int, default=4, help="The number of future batches loaded.")
+
+    parser.add_argument("--eval_n_worker", type=int, default=4, help="The number of workers for eval.")
+    parser.add_argument("--eval_batch_size", type=int, default=512, help="batchsize for eval.")
+
+
     # Transforms
     parser.add_argument(
         "--transforms",
@@ -101,6 +107,8 @@ def base_parser():
     )
 
     parser.add_argument("--gpu_transform", action="store_true", help="perform data transform on gpu (for faster AutoAug).")
+
+    parser.add_argument("--transform_on_gpu", action="store_true", help="Use data augmentation on GPU.")
 
     # Regularization
     parser.add_argument(
@@ -201,8 +209,8 @@ def base_parser():
     parser.add_argument('--norm_loss', type=str, default='none', help='Use normalized cls and distill loss')
     parser.add_argument('--loss_ratio', type=str, default='none', help='Dynamic ratio strategy for cls and distill loss')
 
-    parser.add_argument('--dma_mean', type=float, default=0.5, help='mean of dma weights, in period')
-    parser.add_argument('--dma_var', type=float, default=0.75, help='variance ratio (var/mean^2) of dma weights')
+    parser.add_argument('--sdp_mean', type=float, default=10000, help='mean of sdp weights, in period')
+    parser.add_argument('--sdp_var', type=float, default=0.75, help='variance ratio (var/mean^2) of sdp weights')
     parser.add_argument('--fc_train', type=str, default='none', help='train mode of fc layer')
     parser.add_argument('--online_fc_mode', type=str, default='none', help='train mode of online fc layer')
 

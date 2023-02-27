@@ -23,11 +23,15 @@ from utils.data_worker import worker_loop
 
 logger = logging.getLogger()
 
+
 class MultiProcessLoader():
-    def __init__(self, n_workers, cls_dict, transform, data_dir):
+    def __init__(self, n_workers, cls_dict, transform, data_dir, transform_on_gpu=False, cpu_transform=None, device='cpu'):
         self.n_workers = n_workers
         self.cls_dict = cls_dict
         self.transform = transform
+        self.transform_on_gpu = transform_on_gpu
+        self.cpu_transform = cpu_transform
+        self.device = device
         self.result_queues = []
         self.workers = []
         self.index_queues = []
@@ -36,29 +40,36 @@ class MultiProcessLoader():
             index_queue.cancel_join_thread()
             result_queue = multiprocessing.Queue()
             result_queue.cancel_join_thread()
-            w = multiprocessing.Process(target=worker_loop, args=(index_queue, result_queue, data_dir, self.transform))
+            w = multiprocessing.Process(target=worker_loop, args=(index_queue, result_queue, data_dir, self.transform, self.transform_on_gpu, self.cpu_transform, self.device))
             w.daemon = True
             w.start()
             self.workers.append(w)
             self.index_queues.append(index_queue)
             self.result_queues.append(result_queue)
 
+    def add_new_class(self, cls_dict):
+        self.cls_dict = cls_dict
+
     def load_batch(self, batch):
+        for sample in batch:
+            sample["label"] = self.cls_dict[sample["klass"]]
         for i in range(self.n_workers):
             self.index_queues[i].put(batch[len(batch)*i//self.n_workers:len(batch)*(i+1)//self.n_workers])
 
+    @torch.no_grad()
     def get_batch(self):
         data = dict()
         images = []
         labels = []
         for i in range(self.n_workers):
             loaded_samples = self.result_queues[i].get(timeout=10.0)
-            for sample in loaded_samples:
-                images.append(sample["image"])
-                labels.append(self.cls_dict[sample["klass"]])
-        images = torch.stack(images)
+            if loaded_samples is not None:
+                images.append(loaded_samples["image"])
+                labels.append(loaded_samples["label"])
+        images = torch.cat(images)
+        labels = torch.cat(labels)
         data['image'] = images
-        data['label'] = torch.LongTensor(labels)
+        data['label'] = labels
         return data
 
 def nonzero_indices(bool_mask_tensor):
@@ -344,7 +355,7 @@ class MemoryDataset(Dataset):
     def __init__(self, dataset, transform=None, cls_list=None, device=None, test_transform=None,
                  data_dir=None, transform_on_gpu=True, save_test=None, keep_history=False, use_kornia=True, 
                  buf_transform=None, cls_weight_decay=None, weight_option=None, weight_ema_ratio=None, 
-                 use_human_training=False, klass_warmup = None, klass_train_warmup=None):
+                 use_human_training=False, klass_warmup = None, klass_train_warmup=None, temperature=None):
         
         self.klass_train_warmup = klass_train_warmup
         self.use_human_training = use_human_training
@@ -370,6 +381,7 @@ class MemoryDataset(Dataset):
         self.counts = []
         self.class_usage_cnt = []
         self.tasks = []
+        self.T = temperature
         self.cls_list = []
         self.cls_used_times = []
         self.cls_dict = {cls_list[i]:i for i in range(len(cls_list))}
@@ -702,16 +714,14 @@ class MemoryDataset(Dataset):
                 klass_index = np.where(klass == np.array(self.labels))[0]
                 weight[klass_index] = np.exp(-1*(klass_count/total_count))
                 cls_weight.append(np.exp(-1.5*(klass_count/total_count)))
-            '''
+
+        elif weight_method == "equal_prob":
             ##### for balanced random retrieval #####
             equal_prob = 1/len(self.class_usage_cnt)
             print("equal_prob", equal_prob)
 
             for klass, klass_count in enumerate(self.class_usage_cnt):
                 cls_weight.append(equal_prob)
-            '''
-        
-        #elif weight_method == "grad_based":   
         
         if self.weight_option == "softmax" or "loss":
             weight_tensor = torch.DoubleTensor(cls_weight)
@@ -828,10 +838,40 @@ class MemoryDataset(Dataset):
             print(weight)
         '''
         return weight
-            
+    
+    def get_similarity_weight(self, sim_matrix):
+        weight = torch.Tensor(self.usage_cnt)
+        #total_count = sum(self.class_usage_cnt)
         
+        for my_klass, my_klass_count in enumerate(self.class_usage_cnt):
+            klass_index = np.where(my_klass == np.array(self.labels))[0]
+            x = 0
+            for other_klass, other_class_count in enumerate(self.class_usage_cnt):
+                if my_klass > other_klass:
+                    continue
+                min_klass = min(my_klass, other_klass)
+                max_klass = max(my_klass, other_klass)
+                #print("sim_matrix")
+                #print(sim_matrix)
+                #print("min_klass", min_klass, "max_class", max_klass)
+                if sim_matrix[min_klass][max_klass] is None:
+                    continue
+                x += (sim_matrix[min_klass][max_klass] * other_class_count)
+            weight[klass_index] += x 
+
+        total_count = sum(weight)
+        '''
+        print("self.labels")
+        print(self.labels)
+        print("weight")
+        print(weight)
+        '''
+        weight = torch.exp(-(weight/total_count)*self.T).double()
+        weight = F.softmax(weight, dim=0)
+        return weight
+            
     @torch.no_grad()
-    def get_batch(self, batch_size, stream_batch_size=0, use_weight=None, transform=None, recent_ratio=None, exp_weight=False, weight_method=None, class_loss=None):
+    def get_batch(self, batch_size, stream_batch_size=0, use_weight=None, transform=None, recent_ratio=None, exp_weight=False, weight_method=None, class_loss=None, similarity_matrix = None):
 
         assert batch_size >= stream_batch_size
         stream_batch_size = min(stream_batch_size, len(self.stream_images))
@@ -885,7 +925,40 @@ class MemoryDataset(Dataset):
             elif use_weight == "samplewise":
                 weight = self.samplewise_get_weight(weight_method=weight_method)
                 indices = np.random.choice(range(len(self.images)), size=memory_batch_size, replace=False, p=weight)
-                
+            
+            elif use_weight == "similarity":
+                if similarity_matrix is None:
+                    # balanced random retrieval
+                    weight = np.zeros(memory_batch_size)
+                    indices = np.zeros(memory_batch_size)
+                    cls_weight = self.classwise_get_weight("equal_prob", memory_batch_size)
+
+                    # class별로 구간을 나누고 각 klass에 해당하는 sample들을 채우기
+                    selected_place = random.choices(range(len(self.cls_times)), k=memory_batch_size, weights=cls_weight) # klass가 몇개 select되는지 자리 배정
+
+                    for place in list(set(selected_place)):
+                        place_index = np.where(place == np.array(selected_place))[0]
+                        klass_index = np.where(place == np.array(self.labels))[0]
+
+                        if len(place_index) > len(klass_index): # 자리가 더 많은 것
+                            klass_selected_index = random.sample(list(klass_index), len(klass_index))
+                            klass_selected_index.extend(random.sample(range(len(self.images)), len(place_index) - len(klass_index)))
+                            
+                        else: # sample이 더 많은 것
+                            sample_weight = self.samplewise_get_weight(weight_method=weight_method, indices=klass_index)
+                            klass_selected_index = np.random.choice(list(klass_index), size=len(place_index), replace=False, p=sample_weight)
+                        
+                        for i, index in enumerate(place_index):
+                            indices[index] = klass_selected_index[i]
+                            weight[index] = cls_weight[place]
+
+                    indices = indices.astype('int64')
+
+                else:
+                    print("similarity_matrix")
+                    weight = self.get_similarity_weight(similarity_matrix)
+                    indices = np.random.choice(range(len(self.images)), size=memory_batch_size, replace=False, p=weight)
+            
             else:
                 indices = np.random.choice(range(len(self.images)), size=memory_batch_size, replace=False)
         
@@ -969,9 +1042,9 @@ class MemoryDataset(Dataset):
 
             images = torch.stack(images)
         
-        if use_weight=="classwise":
+        #if use_weight=="classwise":
+        if use_weight is not None:
             data['cls_weight'] = weight
-
         data['counter'] = Counter(labels)
         data['image'] = images
         data['label'] = torch.LongTensor(labels)

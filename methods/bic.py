@@ -58,7 +58,7 @@ class BiasCorrection(ER):
         self.bias_layer = None
         self.valid_list = []
 
-        self.valid_size = round(self.memory_size * 0.1)
+        self.valid_size = kwargs["val_memory_size"] #round(self.memory_size * 0.1)
         self.memory_size = self.memory_size - self.valid_size
 
         self.n_tasks = kwargs["n_tasks"]
@@ -79,20 +79,14 @@ class BiasCorrection(ER):
         self.bias_labels.append([])
         if self.distilling:
             self.prev_model = deepcopy(self.model)
+        #self.total_flops += (len(self.memory.images) * self.forward_flops)
     
-    '''
-    def online_after_task(self, cur_iter):
-        if self.distilling:
-            self.prev_model = deepcopy(self.model)
-    '''
-    '''
     def online_step(self, sample, sample_num, n_worker):
         if sample['klass'] not in self.exposed_classes:
             self.add_new_class(sample['klass'])
 
         use_sample = self.online_valid_update(sample)
         self.num_updates += self.online_iter
-        print("use_sample", use_sample)
         if use_sample:
             self.temp_batch.append(sample)
             if len(self.temp_batch) == self.temp_batchsize:
@@ -104,8 +98,8 @@ class BiasCorrection(ER):
                     self.update_memory(stored_sample)
                 self.temp_batch = []
                 self.num_updates -= int(self.num_updates)
-    '''
-    '''
+    
+    
     def add_new_class(self, class_name):
         if self.distilling:
             self.prev_model = deepcopy(self.model)
@@ -130,7 +124,7 @@ class BiasCorrection(ER):
 
         if 'reset' in self.sched_name:
             self.update_schedule(reset=True)
-    '''
+    
 
     def add_new_class(self, class_name):
         self.exposed_classes.append(class_name)
@@ -188,36 +182,11 @@ class BiasCorrection(ER):
 
         if len(sample) > 0:
             self.memory.register_stream(sample)
-        '''
-        if stream_batch_size > 0:
-            sample_dataset = StreamDataset(
-                sample,
-                dataset=self.dataset,
-                transform=self.train_transform,
-                cls_list=self.exposed_classes,
-                data_dir=self.data_dir,
-                device=self.device,
-                transform_on_gpu=self.gpu_transform
-            )
-        '''
+
         if len(self.memory) > 0 and batch_size - stream_batch_size > 0:
             memory_batch_size = min(len(self.memory), batch_size - stream_batch_size)
 
         for i in range(iterations):
-            '''
-            x = []
-            y = []
-            if stream_batch_size > 0:
-                stream_data = sample_dataset.get_data()
-                x.append(stream_data['image'])
-                y.append(stream_data['label'])
-            if len(self.memory) > 0 and batch_size - stream_batch_size > 0:
-                data = self.memory.get_batch(batch_size, stream_batch_size)
-                x.append(memory_data['image'])
-                y.append(memory_data['label'])
-            x = torch.cat(x)
-            y = torch.cat(y)
-            '''
             data = self.memory.get_batch(batch_size, stream_batch_size)
             x = data["image"].to(self.device)
             y = data["label"].to(self.device)
@@ -235,7 +204,8 @@ class BiasCorrection(ER):
                             else:
                                 logit_old = self.prev_model(x)
                                 logit_old = self.online_bias_forward(logit_old, self.cur_iter - 1)
-                            self.total_flops += (len(x) * self.forward_flops)
+                            
+                            self.total_flops += (len(x) * (self.forward_flops + (len(logit_old[0])*6)/10e9))
 
                 self.optimizer.zero_grad()
                 if self.use_amp:
@@ -261,7 +231,7 @@ class BiasCorrection(ER):
                             else:
                                 logit_old = self.prev_model(x)
                                 logit_old = self.online_bias_forward(logit_old, self.cur_iter - 1)
-                            self.total_flops += (len(x) * self.forward_flops)
+                            self.total_flops += (len(x) * (self.forward_flops + (len(logit_old[0])*6)/10e9))
 
                 if self.use_amp:
                     with torch.cuda.amp.autocast():
@@ -415,6 +385,7 @@ class BiasCorrection(ER):
                     out = self.model(x)
                 model_out.append(out.detach().cpu())
                 xlabels.append(xlabel.detach().cpu())
+                self.total_flops += len(x) * self.forward_flops 
             for iteration in range(n_iter):
                 self.bias_layer.train()
                 total_loss = 0.0
@@ -428,7 +399,7 @@ class BiasCorrection(ER):
                     total_loss += loss.item()
                     # forward할 때 *2, backward 할 때 * 4 해서 총 *6
                     # self.backward_flops를 더해주지 않는 이유는 self.model.eval()이므로 어차피 model update는 되지 않기 때문
-                    self.total_flops += (self.forward_flops +  (len(out)*6)/10e9)
+                    self.total_flops += (len(out)*6)/10e9
 
                 logger.info(
                     "[Stage 2] [{}/{}]\tloss: {:.4f}\talpha: {:.4f}\tbeta: {:.4f}".format(

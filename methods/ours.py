@@ -94,22 +94,31 @@ class Ours(ER):
         self.target_layer = kwargs["target_layer"]
         self.freeze_warmup = 500
         self.grad_dict = {}
+        self.corr_map = {}
+        self.T = 0.5
         self.min_p = kwargs["min_p"]
         self.max_p = kwargs["max_p"]
+        
+        # Information based freezing
+        self.fisher_ema_ratio = 0.01
+        self.fisher = {n: torch.zeros_like(p) for n, p in list(self.model.named_parameters())[:-2] if p.requires_grad}
+        self.cumulative_fisher = []
+
         # for gradient subsampling
         self.grad_score_per_layer = None 
         # Hyunseo: gradient threshold
         if self.target_layer == "whole_conv2":
-            target_layers = ["group1.blocks.block0.conv2.block.0.weight", "group1.blocks.block1.conv2.block.0.weight", "group2.blocks.block0.conv2.block.0.weight", "group2.blocks.block1.conv2.block.0.weight", "group3.blocks.block0.conv2.block.0.weight", "group3.blocks.block1.conv2.block.0.weight", "group4.blocks.block0.conv2.block.0.weight", "group4.blocks.block1.conv2.block.0.weight"]
+            self.target_layers = ["group1.blocks.block0.conv2.block.0.weight", "group1.blocks.block1.conv2.block.0.weight", "group2.blocks.block0.conv2.block.0.weight", "group2.blocks.block1.conv2.block.0.weight", "group3.blocks.block0.conv2.block.0.weight", "group3.blocks.block1.conv2.block.0.weight", "group4.blocks.block0.conv2.block.0.weight", "group4.blocks.block1.conv2.block.0.weight"]
         elif self.target_layer == "last_conv2":
-            target_layers = ["group1.blocks.block1.conv2.block.0.weight", "group2.blocks.block1.conv2.block.0.weight", "group3.blocks.block1.conv2.block.0.weight", "group4.blocks.block1.conv2.block.0.weight"]
-            
-        self.grad_mavg_base = {n: torch.zeros_like(p) for n, p in list(self.model.named_parameters())[:-2] if p.requires_grad and n in target_layers}
-        self.grad_mavgsq_base = {n: torch.zeros_like(p) for n, p in list(self.model.named_parameters())[:-2] if p.requires_grad and n in target_layers}
-        self.grad_mvar_base = {n: torch.zeros_like(p) for n, p in list(self.model.named_parameters())[:-2] if p.requires_grad and n in target_layers}
-        self.grad_cls_score_mavg_base = {n: 0 for n, p in list(self.model.named_parameters())[:-2] if p.requires_grad and n in target_layers}
-        self.grad_criterion_base = {n: 0 for n, p in list(self.model.named_parameters())[:-2] if p.requires_grad and n in target_layers}
-        self.grad_dict_base = {n: [] for n, p in list(self.model.named_parameters())[:-2] if p.requires_grad and n in target_layers}
+            self.target_layers = ["group1.blocks.block1.conv2.block.0.weight", "group2.blocks.block1.conv2.block.0.weight", "group3.blocks.block1.conv2.block.0.weight", "group4.blocks.block1.conv2.block.0.weight"]
+        
+        self.corr_warm_up = 50
+        self.grad_mavg_base = {n: torch.zeros_like(p) for n, p in list(self.model.named_parameters())[:-2] if p.requires_grad and n in self.target_layers}
+        self.grad_mavgsq_base = {n: torch.zeros_like(p) for n, p in list(self.model.named_parameters())[:-2] if p.requires_grad and n in self.target_layers}
+        self.grad_mvar_base = {n: torch.zeros_like(p) for n, p in list(self.model.named_parameters())[:-2] if p.requires_grad and n in self.target_layers}
+        self.grad_cls_score_mavg_base = {n: 0 for n, p in list(self.model.named_parameters())[:-2] if p.requires_grad and n in self.target_layers}
+        self.grad_criterion_base = {n: 0 for n, p in list(self.model.named_parameters())[:-2] if p.requires_grad and n in self.target_layers}
+        self.grad_dict_base = {n: [] for n, p in list(self.model.named_parameters())[:-2] if p.requires_grad and n in self.target_layers}
         self.selected_num = 512
         print("keys")
         print(self.grad_mavg_base.keys())
@@ -121,7 +130,9 @@ class Ours(ER):
             self.grad_mavg_base[key] = torch.zeros(self.selected_num).to(self.device)
             self.grad_mavgsq_base[key] = torch.zeros(self.selected_num).to(self.device)
             self.grad_mvar_base[key] = torch.zeros(self.selected_num).to(self.device)
-            
+
+        print("self.selected_mask.keys()")
+        print(self.selected_mask.keys())
         '''
         for idx, (name, layer) in enumerate(self.model.named_modules()):
             print(layer.requires_grad)
@@ -209,7 +220,7 @@ class Ours(ER):
                                     transform_on_gpu=self.gpu_transform, use_kornia=self.use_kornia, 
                                     cls_weight_decay = self.cls_weight_decay, weight_option = self.weight_option, 
                                     weight_ema_ratio = self.weight_ema_ratio, use_human_training=self.use_human_training, 
-                                    klass_warmup = self.klass_warmup, klass_train_warmup = self.klass_train_warmup)
+                                    klass_warmup = self.klass_warmup, klass_train_warmup = self.klass_train_warmup, temperature=self.T)
         self.temp_batch = []
         self.num_updates = 0
         self.train_count = 0
@@ -258,9 +269,6 @@ class Ours(ER):
 
         #print("sma_class_loss")
         #print(self.sma_class_loss)
-
-    def get_total_flops(self):
-        return self.total_flops
 
     def get_threshold(self):
         print("self.normalized_dict")
@@ -759,6 +767,20 @@ class Ours(ER):
             self.freeze_idx = []
         '''
 
+        # initialize with mean
+        if len(self.grad_mavg) >= 2:    
+            self.grad_mavg_base = {key: torch.mean(torch.stack([self.grad_mavg[kls][key] for kls in range(len(self.grad_mavg))]), dim=0) for key in self.grad_mavg_base.keys()}
+            self.grad_mavgsq_base = {key: torch.mean(torch.stack([self.grad_mavgsq[kls][key] for kls in range(len(self.grad_mavg))]), dim=0) for key in self.grad_mavgsq_base.keys()}
+            self.grad_mvar_base = {key: torch.mean(torch.stack([self.grad_mvar[kls][key] for kls in range(len(self.grad_mavg))]), dim=0) for key in self.grad_mvar_base.keys()}
+            
+            '''
+            print("checking!!")
+            last_key = list(self.grad_mavg_base.keys())[-1]
+            print(self.grad_mavg[0][last_key][:10])
+            print(self.grad_mavg[1][last_key][:10])
+            print(self.grad_mavg_base[last_key][:10])
+            '''
+
         self.grad_mavg.append(copy.deepcopy(self.grad_mavg_base))
         self.grad_mavgsq.append(copy.deepcopy(self.grad_mavgsq_base))
         self.grad_mvar.append(copy.deepcopy(self.grad_mvar_base))
@@ -767,28 +789,38 @@ class Ours(ER):
         autograd_hacks.remove_hooks(self.model)
         autograd_hacks.add_hooks(self.model)
         
-        '''
         ### update similarity map ###
-        if len(self.corr_map) > 1:
+        len_key = len(self.corr_map.keys())
+        if len_key > 1:
             total_corr = 0.0
             total_corr_count = 0
-            for i in range(len(self.corr_map)):
-                for j in range(i+1, len(self.corr_map)):
+            for i in range(len_key):
+                for j in range(i+1, len_key):
                     total_corr += self.corr_map[i][j]
                     total_corr_count += 1
             self.initial_corr = total_corr / total_corr_count
         else:
-            self.initial_corr = 0
+            self.initial_corr = None
         
-        for i in range(len(self.corr_map)):
+        for i in range(len_key):
             # 모든 class의 avg_corr로 initialize
-            self.corr_map[i].append(self.initial_corr)
+            self.corr_map[i][len_key] = self.initial_corr
+            
         # 자기 자신은 1로 initialize
-        self.corr_map.append(1)
-        '''
+        self.corr_map[len_key] = {}
+        self.corr_map[len_key][len_key] = None
+        
+        #print("self.corr_map")
+        #print(self.corr_map)
 
     def make_probability(self, z_score, min_p, max_p):
-        return torch.Tensor(1 - stats.norm.cdf(z_score)).to(self.device)
+        prob = 2*(1 - stats.norm.cdf(z_score))
+        copy_prob = copy.deepcopy(prob)
+        for idx, p in enumerate(prob):
+            if idx==0:
+                continue
+            copy_prob[idx] = copy_prob[idx-1]*prob[idx]
+        return torch.Tensor(copy_prob).to(self.device)
         # return ((max_p-min_p)/(-4))*(probability-2.5)+max_p
 
     def online_train(self, sample, batch_size, n_worker, iterations=1, stream_batch_size=0, sample_num=None):
@@ -843,10 +875,17 @@ class Ours(ER):
             #memory_data = self.memory.get_batch(memory_batch_size, use_weight="classwise", weight_method = self.weight_method, n_class = self.num_learned_class, avg_prob = self.avg_prob)
             class_loss = [np.mean(self.sma_class_loss[key]) for key in list(self.sma_class_loss.keys()) if len(self.sma_class_loss[key]) != 0]
             
+            '''
             if len(class_loss) == 0:
+                memory_data = self.memory.get_batch(memory_batch_size, use_weight=self.use_weight, weight_method = self.weight_method, similarity_matrix=self.corr_map)
+            else:
+                memory_data = self.memory.get_batch(memory_batch_size, use_weight=self.use_weight, weight_method = self.weight_method, class_loss = class_loss, similarity_matrix=self.corr_map)
+            '''
+            if sample_num <= self.corr_warm_up:
+                # balanced random sampling
                 memory_data = self.memory.get_batch(memory_batch_size, use_weight=self.use_weight, weight_method = self.weight_method)
             else:
-                memory_data = self.memory.get_batch(memory_batch_size, use_weight=self.use_weight, weight_method = self.weight_method, class_loss = class_loss)
+                memory_data = self.memory.get_batch(memory_batch_size, use_weight=self.use_weight, weight_method = self.weight_method, similarity_matrix=self.corr_map)
             
             # std check 위해서
             class_std, sample_std = self.memory.get_std()
@@ -856,11 +895,14 @@ class Ours(ER):
             x.append(memory_data['image'])
             y.append(memory_data['label'])
             counter = memory_data["counter"]
+            cls_weight = memory_data['cls_weight']
+            '''
             if self.use_weight=="classwise":
                 cls_weight = memory_data['cls_weight']
             else:
                 cls_weight = None
-
+            '''
+            
             if self.use_batch_cutmix:
                 memory_data2 = self.memory.get_batch(memory_batch_size, prev_batch_index=memory_data['indices'])
                 x2.append(memory_data2['image'])
@@ -899,8 +941,13 @@ class Ours(ER):
             
             self.optimizer.step()
             self.update_gradstat(sample_num, y)
+            
+            if sample_num >= self.corr_warm_up:
+                self.update_correlation(y)
+            
+            if self.ver == "ver10":
+                self.calculate_fisher()
 
-            self.calculate_fisher()
             '''
             if sample_num >= 150:
                 self.calculate_covariance()
@@ -927,6 +974,9 @@ class Ours(ER):
             if self.ver in ["ver9", "ver10"]:
                 self.unfreeze_layers()
                 self.freeze_idx = []
+
+        print("self.corr_map")
+        print(self.corr_map)
 
         return total_loss / iterations, correct / num_data, None, None, None, None, None
 
@@ -1451,32 +1501,58 @@ class Ours(ER):
         else:
             self.memory.replace_sample(sample)
 
-    def update_correlation(self):
+    def update_correlation(self, labels):
         cor_dic = {}
         for n, p in self.model.named_parameters():
-            if p.requires_grad is True and p.grad is not None:
+            if p.requires_grad is True and p.grad is not None and n in self.target_layers:
                 if not p.grad.isnan().any():
                     for i, y in enumerate(labels):
                         sub_sampled = p.grad1[i].clone().detach().clamp(-1000, 1000).flatten()[self.selected_mask[n]]
-                        if y not in cor_dic.keys():
-                            cor_dic[y] = [sub_sampled]
+                        if y.item() not in cor_dic.keys():
+                            cor_dic[y.item()] = [sub_sampled]
                         else:
-                            cor_dic[y].append(sub_sampled)
+                            cor_dic[y.item()].append(sub_sampled)
 
         centered_list = []
         key_list = list(cor_dic.keys())
+
         for key in key_list:
+            #print("key", key, "len", len(cor_dic[key]))
             stacked_tensor = torch.stack(cor_dic[key])
-            stacked_tensor -= torch.mean(stacked_tensor, dim=0) # make zero mean
-            stacked_tensor /= torch.norm(stacked_tensor, p=2, dim=1) # make unit vector
+            #print("stacked_tensor", stacked_tensor.shape)
+            #stacked_tensor -= torch.mean(stacked_tensor, dim=0) # make zero mean
+            norm_tensor = torch.norm(stacked_tensor, p=2, dim=1) # make unit vector
+            
+            for i in range(len(norm_tensor)):
+                stacked_tensor[i] /= norm_tensor[i]
+                
+            #stacked_tensor.div(norm_tensor.expand_as(stacked_tensor))
+            '''
+            for i in range(len(norm_tensor)):
+                stacked_tensor[i] /= norm_tensor[i]
+            '''
             centered_list.append(stacked_tensor)
         
-        for key_i in key_list:
-            for key_j in key_list[1:]:
-                cor_i_j = torch.mean(torch.sum(centered_list[key_i]*centered_list[key_j], dim=1), dim=0)
+        print("key_list")
+        print(key_list)
+        
+        for i, key_i in enumerate(key_list):
+            for j, key_j in enumerate(key_list):
+                if key_i > key_j:
+                    continue
+                cor_i_j = torch.mean(torch.matmul(centered_list[i], centered_list[j].T)).item()
                 # [i][j] correlation update
-                self.corr_map[key_i][key_j] = self.grad_ema_ratio * (cor_i_j - self.corr_map[key_i][key_j])
-
+                '''
+                print("key_i", key_i, "key_j", key_j, "cor_i_j", cor_i_j)
+                print("self.corr_map[key_i][key_j]")
+                print(self.corr_map[key_i][key_j])
+                '''
+                if self.corr_map[key_i][key_j] == None:
+                    self.corr_map[key_i][key_j] = cor_i_j
+                else:
+                    self.corr_map[key_i][key_j] += self.grad_ema_ratio * (cor_i_j - self.corr_map[key_i][key_j])
+        #print("self.corr_map")
+        #print(self.corr_map)
 
     def update_gradstat(self, sample_num, labels):
         effective_ratio = (2 - self.grad_ema_ratio) / self.grad_ema_ratio
@@ -1532,8 +1608,7 @@ class Ours(ER):
         #self.grad_score_per_layer = {layer: torch.sum(torch.Tensor([self.grad_cls_score_mavg[klass][layer] for klass in range(len(self.exposed_classes))]).to(self.device) * label_ratio).item() for layer in list(self.grad_cls_score_mavg[0].keys())}
         
         ### current scoring 방식 ### 
-        self.grad_score_per_layer = {layer: torch.sum(torch.Tensor([self.grad_cls_score_mavg[klass][layer] for klass in range(len(self.exposed_classes))]).to(self.device) * label_ratio).item() for layer in list(self.grad_cls_score_mavg[0].keys())}
-        
+        self.grad_score_per_layer = {layer: torch.sum(torch.Tensor([self.grad_criterion[klass][layer] for klass in range(len(self.exposed_classes))]).to(self.device) * label_ratio).item() for layer in list(self.grad_criterion[0].keys())}
         self.writer.add_scalars("layer_score", self.grad_score_per_layer, sample_num)
         
         #self.calculate_covariance()
@@ -1559,18 +1634,17 @@ class Ours(ER):
             if n in self.fisher.keys():
                 if p.requires_grad is True and p.grad is not None:
                     if not p.grad.isnan().any():
-                        self.delta[n] += self.fisher_ema_ratio * (p.clone().detach() - self.delta[n])
                         self.fisher[n] += self.fisher_ema_ratio * (p.grad.clone().detach().clamp(-1000, 1000) ** 2 - self.fisher[n])
                 if 'initial' in n:
-                    group_fisher[0].append((self.fisher[n]*(p.clone().detach() - self.delta[n])**2).sum().item())
+                    group_fisher[0].append(self.fisher[n].sum().item())
                 elif 'group1' in n:
-                    group_fisher[1].append((self.fisher[n]*(p.clone().detach() - self.delta[n])**2).sum().item())
+                    group_fisher[1].append(self.fisher[n].sum().item())
                 elif 'group2' in n:
-                    group_fisher[2].append((self.fisher[n]*(p.clone().detach() - self.delta[n])**2).sum().item())
+                    group_fisher[2].append(self.fisher[n].sum().item())
                 elif 'group3' in n:
-                    group_fisher[3].append((self.fisher[n]*(p.clone().detach() - self.delta[n])**2).sum().item())
+                    group_fisher[3].append(self.fisher[n].sum().item())
                 elif 'group4' in n:
-                    group_fisher[4].append((self.fisher[n]*(p.clone().detach() - self.delta[n])**2).sum().item())
+                    group_fisher[4].append(self.fisher[n].sum().item())
         group_fisher_sum = [sum(fishers) for fishers in group_fisher]
         self.total_fisher = sum(group_fisher_sum)
         self.cumulative_fisher = [sum(group_fisher_sum[0:i+1]) for i in range(5)]
@@ -1582,9 +1656,13 @@ class Ours(ER):
 
     def get_freeze_idx(self):
         freeze_score = []
-        freeze_score.append(1.0)
+        freeze_score.append(1)
         for i in range(5):
-            freeze_score.append(self.total_model_flops/(self.total_model_flops - self.cumulative_backward_flops[i])*(self.total_fisher - self.cumulative_fisher[i])/(self.total_fisher+1e-10))
+            freeze_score.append(self.total_model_flops/(self.total_model_flops - self.cumulative_backward_flops[i])*(self.total_fisher - self.cumulative_fisher[i])/(self.total_fisher+1e-5))
         optimal_freeze = np.argmax(freeze_score)
+        print("cumulative_backward_flops")
+        print(self.cumulative_backward_flops)
+        print("self.cumulative_fisher")
+        print(self.cumulative_fisher)
         print(freeze_score, optimal_freeze)
         self.freeze_idx = list(range(5))[0:optimal_freeze]

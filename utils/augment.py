@@ -2,16 +2,75 @@
 # https://github.com/DeepVoltaire/AutoAugment
 
 
-import numpy as np
-from PIL import ImageOps
-
 from PIL import Image, ImageEnhance, ImageOps
 import numpy as np
 import random
-
 import logging
 
+import torch
+from torchvision import transforms
+
+from utils.data_loader import get_statistics
+
 logger = logging.getLogger()
+
+
+def get_transform(dataset, transform_list, transform_on_gpu=False):
+    # Transform Definition
+    mean, std, n_classes, inp_size, _ = get_statistics(dataset=dataset)
+    train_transform = []
+    if "cutout" in transform_list:
+        train_transform.append(Cutout(size=16))
+    if "randaug" in transform_list:
+        train_transform.append(transforms.RandAugment())
+    if "autoaug" in transform_list:
+        if hasattr(transforms, 'AutoAugment'):
+            if 'cifar' in dataset:
+                train_transform.append(transforms.AutoAugment(transforms.AutoAugmentPolicy('cifar10')))
+            elif 'imagenet' in dataset:
+                train_transform.append(transforms.AutoAugment(transforms.AutoAugmentPolicy('imagenet')))
+        else:
+            train_transform.append(select_autoaugment(dataset))
+    if "trivaug" in transform_list:
+        train_transform.append(transforms.TrivialAugmentWide())
+    if transform_on_gpu:
+        cpu_transform = transforms.Compose(
+            [
+                transforms.Resize((inp_size, inp_size)),
+                transforms.PILToTensor()
+            ])
+        train_transform = transforms.Compose(
+            [
+                transforms.RandomCrop(inp_size, padding=4),
+                transforms.RandomHorizontalFlip(),
+                *train_transform,
+                transforms.ConvertImageDtype(torch.float32),
+                transforms.Normalize(mean, std),
+            ]
+        )
+    else:
+        cpu_transform = None
+        train_transform = transforms.Compose(
+            [
+                transforms.Resize((inp_size, inp_size)),
+                transforms.RandomCrop(inp_size, padding=4),
+                transforms.RandomHorizontalFlip(),
+                *train_transform,
+                transforms.ToTensor(),
+                transforms.Normalize(mean, std),
+            ]
+        )
+    logger.info(f"Using train-transforms {train_transform}")
+
+    test_transform = transforms.Compose(
+        [
+            transforms.Resize((inp_size, inp_size)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean, std),
+        ]
+    )
+
+    return train_transform, test_transform, cpu_transform, n_classes
 
 
 def select_autoaugment(dataset):
