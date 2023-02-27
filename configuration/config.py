@@ -181,6 +181,7 @@ def base_parser():
     # BiC
     parser.add_argument("--distilling", type=bool, default=True, help="use distillation for BiC.")
     parser.add_argument("--n_tasks", type=int, default=4, help="use distillation for BiC.")
+    parser.add_argument("--val_memory_size", type=int, default=50)
 
     # AGEM
     parser.add_argument('--agem_batch', type=int, default=240, help='A-GEM batch size for calculating gradient')
