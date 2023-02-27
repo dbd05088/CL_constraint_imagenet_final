@@ -106,19 +106,33 @@ def get_flops_pytorch(model, input_res,
                       output_precision=3,
                       flops_units='GMac',
                       param_units='M'):
+    
     global CUSTOM_MODULES_MAPPING
     CUSTOM_MODULES_MAPPING = custom_modules_hooks
-
 
     flops_model = add_flops_counting_methods(model) # counting 할 수 있도록 model 설정해주는 것
     flops_model.train()
     flops_model.start_flops_count(ost=ost, verbose=verbose, ignore_list=ignore_modules)
+    
+    '''
     flops_model.initial.start_flops_count(ost=ost, verbose=verbose, ignore_list=ignore_modules)
     flops_model.group1.start_flops_count(ost=ost, verbose=verbose, ignore_list=ignore_modules)
     flops_model.group2.start_flops_count(ost=ost, verbose=verbose, ignore_list=ignore_modules)
     flops_model.group3.start_flops_count(ost=ost, verbose=verbose, ignore_list=ignore_modules)
     flops_model.group4.start_flops_count(ost=ost, verbose=verbose, ignore_list=ignore_modules)
     flops_model.fc.start_flops_count(ost=ost, verbose=verbose, ignore_list=ignore_modules)
+    '''
+    flops_model.initial.start_flops_count(ost=ost, verbose=verbose, ignore_list=ignore_modules)
+    flops_model.group1.blocks.block0.start_flops_count(ost=ost, verbose=verbose, ignore_list=ignore_modules)
+    flops_model.group1.blocks.block1.start_flops_count(ost=ost, verbose=verbose, ignore_list=ignore_modules)
+    flops_model.group2.blocks.block0.start_flops_count(ost=ost, verbose=verbose, ignore_list=ignore_modules)
+    flops_model.group2.blocks.block1.start_flops_count(ost=ost, verbose=verbose, ignore_list=ignore_modules)
+    flops_model.group3.blocks.block0.start_flops_count(ost=ost, verbose=verbose, ignore_list=ignore_modules)
+    flops_model.group3.blocks.block1.start_flops_count(ost=ost, verbose=verbose, ignore_list=ignore_modules)
+    flops_model.group4.blocks.block0.start_flops_count(ost=ost, verbose=verbose, ignore_list=ignore_modules)
+    flops_model.group4.blocks.block1.start_flops_count(ost=ost, verbose=verbose, ignore_list=ignore_modules)
+    flops_model.fc.start_flops_count(ost=ost, verbose=verbose, ignore_list=ignore_modules)
+    
 
     if input_constructor:
         input = input_constructor(input_res)
@@ -132,7 +146,7 @@ def get_flops_pytorch(model, input_res,
             batch = torch.ones(()).new_empty((1, *input_res))
 
         _ = flops_model(batch)
-
+    '''
     forward_flops_count, backward_flops_count, params_count, fc_params_count, buffers_count = flops_model.compute_average_flops_cost()
     initial_forward_flops_count, initial_backward_flops_count, initial_params_count, _, _ = flops_model.initial.compute_average_flops_cost()
     group1_forward_flops_count, group1_backward_flops_count, group1_params_count, _, _ = flops_model.group1.compute_average_flops_cost()
@@ -140,17 +154,34 @@ def get_flops_pytorch(model, input_res,
     group3_forward_flops_count, group3_backward_flops_count, group3_params_count, _, _ = flops_model.group3.compute_average_flops_cost()
     group4_forward_flops_count, group4_backward_flops_count, group4_params_count, _, _ = flops_model.group4.compute_average_flops_cost()
     fc_forward_flops_count, fc_backward_flops_count, _, _, _ = flops_model.fc.compute_average_flops_cost()
-    
+    '''
+    forward_flops_count, backward_flops_count, params_count, fc_params_count, buffers_count = flops_model.compute_average_flops_cost()
+    initial_forward_flops_count, initial_backward_flops_count, initial_params_count, _, _ = flops_model.initial.compute_average_flops_cost()
+    group1_block0_forward_flops_count, group1_block0_backward_flops_count, group1_block0_params_count, _, _ = flops_model.group1.blocks.block0.compute_average_flops_cost()
+    group1_block1_forward_flops_count, group1_block1_backward_flops_count, group1_block1_params_count, _, _ = flops_model.group1.blocks.block1.compute_average_flops_cost()
+    group2_block0_forward_flops_count, group2_block0_backward_flops_count, group2_block0_params_count, _, _ = flops_model.group2.blocks.block0.compute_average_flops_cost()
+    group2_block1_forward_flops_count, group2_block1_backward_flops_count, group2_block1_params_count, _, _ = flops_model.group2.blocks.block1.compute_average_flops_cost()
+    group3_block0_forward_flops_count, group3_block0_backward_flops_count, group3_block0_params_count, _, _ = flops_model.group3.blocks.block0.compute_average_flops_cost()
+    group3_block1_forward_flops_count, group3_block1_backward_flops_count, group3_block1_params_count, _, _ = flops_model.group3.blocks.block1.compute_average_flops_cost()
+    group4_block0_forward_flops_count, group4_block0_backward_flops_count, group4_block0_params_count, _, _ = flops_model.group4.blocks.block0.compute_average_flops_cost()
+    group4_block1_forward_flops_count, group4_block1_backward_flops_count, group4_block1_params_count, _, _ = flops_model.group4.blocks.block1.compute_average_flops_cost()
+    fc_forward_flops_count, fc_backward_flops_count, _, _, _ = flops_model.fc.compute_average_flops_cost()
     print("!!!!!!!!!!!")
-    print("forward_flops_count", forward_flops_count)
+    print("forward_flops_count", forward_flops_count, "backward_flops_count", backward_flops_count)
     print("initial_forward_flops_count", initial_forward_flops_count, "group1_backward_flops_count", initial_backward_flops_count)
-    print("group1_forward_flops_count", group1_forward_flops_count, "group1_backward_flops_count", group1_backward_flops_count)
-    print("group2_forward_flops_count", group2_forward_flops_count, "group2_backward_flops_count", group2_backward_flops_count)
-    print("group3_forward_flops_count", group3_forward_flops_count, "group3_backward_flops_count", group3_backward_flops_count)
-    print("group4_forward_flops_count", group4_forward_flops_count, "group4_backward_flops_count", group4_backward_flops_count)
+    print("forward_sum", group1_block0_forward_flops_count+group1_block1_forward_flops_count+group2_block0_forward_flops_count+group2_block1_forward_flops_count+group3_block0_forward_flops_count+group3_block1_forward_flops_count+group4_block0_forward_flops_count+group4_block1_forward_flops_count)
+    print("backward_sum", group1_block0_backward_flops_count+group1_block1_backward_flops_count+group2_block0_backward_flops_count+group2_block1_backward_flops_count+group3_block0_backward_flops_count+group3_block1_backward_flops_count+group4_block0_backward_flops_count+group4_block1_backward_flops_count)
+    print("group1_block0_forward_flops_count", group1_block0_forward_flops_count, "group1_block0_backward_flops_count", group1_block0_backward_flops_count)
+    print("group1_block1_forward_flops_count", group1_block1_forward_flops_count, "group1_block1_backward_flops_count", group1_block1_backward_flops_count)
+    print("group2_block0_forward_flops_count", group2_block0_forward_flops_count, "group2_block0_backward_flops_count", group2_block0_backward_flops_count)
+    print("group2_block1_forward_flops_count", group2_block1_forward_flops_count, "group2_block1_backward_flops_count", group2_block1_backward_flops_count)
+    print("group3_block0_forward_flops_count", group3_block0_forward_flops_count, "group3_block0_backward_flops_count", group3_block0_backward_flops_count)
+    print("group3_block1_forward_flops_count", group3_block1_forward_flops_count, "group3_block1_backward_flops_count", group3_block1_backward_flops_count)
+    print("group4_block0_forward_flops_count", group4_block0_forward_flops_count, "group4_block0_backward_flops_count", group4_block0_backward_flops_count)
+    print("group4_block1_forward_flops_count", group4_block1_forward_flops_count, "group4_block1_backward_flops_count", group4_block1_backward_flops_count)
     print("fc_forward_flops_count", fc_forward_flops_count, "fc_backward_flops_count", fc_backward_flops_count)
     print("!!!!!!!!!!!")
-
+    
     if print_per_layer_stat:
         print_model_with_flops(
             flops_model,
@@ -175,47 +206,87 @@ def get_flops_pytorch(model, input_res,
             precision=output_precision
         )
         print_model_with_flops_sub(
-            flops_model.group1,
-            group1_forward_flops_count,
-            group1_backward_flops_count,
-            group1_params_count,
+            flops_model.group1.blocks.block0,
+            group1_blocks0_forward_flops_count,
+            group1_blocks0_backward_flops_count,
+            group1_blocks0_params_count,
             ost=ost,
             flops_units=flops_units,
             param_units=param_units,
             precision=output_precision
         )
         print_model_with_flops_sub(
-            flops_model.group2,
-            group2_forward_flops_count,
-            group2_backward_flops_count,
-            group2_params_count,
+            flops_model.group1.blocks.block1,
+            group1_blocks1_forward_flops_count,
+            group1_blocks1_backward_flops_count,
+            group1_blocks1_params_count,
             ost=ost,
             flops_units=flops_units,
             param_units=param_units,
             precision=output_precision
         )
         print_model_with_flops_sub(
-            flops_model.group3,
-            group3_forward_flops_count,
-            group3_backward_flops_count,
-            group3_params_count,
+            flops_model.group2.blocks.block0,
+            group2_blocks0_forward_flops_count,
+            group2_blocks0_backward_flops_count,
+            group2_blocks0_params_count,
             ost=ost,
             flops_units=flops_units,
             param_units=param_units,
             precision=output_precision
         )
         print_model_with_flops_sub(
-            flops_model.group4,
-            group4_forward_flops_count,
-            group4_backward_flops_count,
-            group4_params_count,
+            flops_model.group2.blocks.block1,
+            group2_blocks1_forward_flops_count,
+            group2_blocks1_backward_flops_count,
+            group2_blocks1_params_count,
             ost=ost,
             flops_units=flops_units,
             param_units=param_units,
             precision=output_precision
         )
         print_model_with_flops_sub(
-            flops_model.group4,
+            flops_model.group3.blocks.block0,
+            group3_blocks0_forward_flops_count,
+            group3_blocks0_backward_flops_count,
+            group3_blocks0_params_count,
+            ost=ost,
+            flops_units=flops_units,
+            param_units=param_units,
+            precision=output_precision
+        )
+        print_model_with_flops_sub(
+            flops_model.group3.blocks.block1,
+            group3_blocks1_forward_flops_count,
+            group3_blocks1_backward_flops_count,
+            group3_blocks1_params_count,
+            ost=ost,
+            flops_units=flops_units,
+            param_units=param_units,
+            precision=output_precision
+        )
+        print_model_with_flops_sub(
+            flops_model.group4.blocks.block0,
+            group4_blocks0_forward_flops_count,
+            group4_blocks0_backward_flops_count,
+            group4_blocks0_params_count,
+            ost=ost,
+            flops_units=flops_units,
+            param_units=param_units,
+            precision=output_precision
+        )
+        print_model_with_flops_sub(
+            flops_model.group4.blocks.block1,
+            group4_blocks1_forward_flops_count,
+            group4_blocks1_backward_flops_count,
+            group4_blocks1_params_count,
+            ost=ost,
+            flops_units=flops_units,
+            param_units=param_units,
+            precision=output_precision
+        )
+        print_model_with_flops_sub(
+            flops_model.fc,
             fc_forward_flops_count,
             fc_backward_flops_count,
             fc_params_count,
@@ -226,20 +297,28 @@ def get_flops_pytorch(model, input_res,
         )
     flops_model.stop_flops_count()
     flops_model.initial.stop_flops_count()
-    flops_model.group1.stop_flops_count()
-    flops_model.group2.stop_flops_count()
-    flops_model.group3.stop_flops_count()
-    flops_model.group4.stop_flops_count()
+    flops_model.group1.blocks.block0.stop_flops_count()
+    flops_model.group1.blocks.block1.stop_flops_count()
+    flops_model.group2.blocks.block0.stop_flops_count()
+    flops_model.group2.blocks.block1.stop_flops_count()
+    flops_model.group3.blocks.block0.stop_flops_count()
+    flops_model.group3.blocks.block1.stop_flops_count()
+    flops_model.group4.blocks.block0.stop_flops_count()
+    flops_model.group4.blocks.block1.stop_flops_count()
     flops_model.fc.stop_flops_count()
     CUSTOM_MODULES_MAPPING = {}
 
     return [forward_flops_count, backward_flops_count, params_count, fc_params_count, buffers_count], \
         [initial_forward_flops_count, initial_backward_flops_count, initial_params_count], \
-        [group1_forward_flops_count, group1_backward_flops_count, group1_params_count], \
-        [group2_forward_flops_count, group2_backward_flops_count, group2_params_count], \
-        [group3_forward_flops_count, group3_backward_flops_count, group3_params_count], \
-        [group4_forward_flops_count, group4_backward_flops_count, group4_params_count], \
-        [fc_forward_flops_count, fc_backward_flops_count, fc_params_count] \
+        [group1_block0_forward_flops_count, group1_block0_backward_flops_count, group1_block0_params_count], \
+        [group1_block1_forward_flops_count, group1_block1_backward_flops_count, group1_block1_params_count], \
+        [group2_block0_forward_flops_count, group2_block0_backward_flops_count, group2_block0_params_count], \
+        [group2_block1_forward_flops_count, group2_block1_backward_flops_count, group2_block1_params_count], \
+        [group3_block0_forward_flops_count, group3_block0_backward_flops_count, group3_block0_params_count], \
+        [group3_block1_forward_flops_count, group3_block1_backward_flops_count, group3_block1_params_count], \
+        [group4_block0_forward_flops_count, group4_block0_backward_flops_count, group4_block0_params_count], \
+        [group4_block1_forward_flops_count, group4_block1_backward_flops_count, group4_block1_params_count], \
+        [fc_forward_flops_count, fc_backward_flops_count, fc_params_count]
 
 
 
@@ -413,7 +492,7 @@ def add_backward_flops_counting_methods(net_main_module):
 
     return net_main_module
 
-def add_flops_counting_methods(net_main_module, end=False):
+def add_flops_counting_methods(net_main_module, end=False, name=None):
     # adding additional methods to the existing module object,
     # this is done this way so that each function has access to self object
     net_main_module.start_flops_count = start_flops_count.__get__(net_main_module)
@@ -424,14 +503,19 @@ def add_flops_counting_methods(net_main_module, end=False):
     net_main_module.reset_flops_count()
 
     # for layer별 flops count
+    
     if not end:
-        add_flops_counting_methods(net_main_module.initial, True)
-        add_flops_counting_methods(net_main_module.group1, True)
-        add_flops_counting_methods(net_main_module.group2, True)
-        add_flops_counting_methods(net_main_module.group3, True)
-        add_flops_counting_methods(net_main_module.group4, True)
-        add_flops_counting_methods(net_main_module.fc, True)
-
+        add_flops_counting_methods(net_main_module.initial, end=True)
+        add_flops_counting_methods(net_main_module.group1.blocks.block0, end=True)
+        add_flops_counting_methods(net_main_module.group1.blocks.block1, end=True)
+        add_flops_counting_methods(net_main_module.group2.blocks.block0, end=True)
+        add_flops_counting_methods(net_main_module.group2.blocks.block1, end=True)
+        add_flops_counting_methods(net_main_module.group3.blocks.block0, end=True)
+        add_flops_counting_methods(net_main_module.group3.blocks.block1, end=True)
+        add_flops_counting_methods(net_main_module.group4.blocks.block0, end=True)
+        add_flops_counting_methods(net_main_module.group4.blocks.block1, end=True)
+        add_flops_counting_methods(net_main_module.fc, end=True)
+    
     return net_main_module
 
 
@@ -464,6 +548,10 @@ def compute_average_flops_cost(self):
     print("backward_flops_sum", backward_flops_sum)
     '''
 
+    # layer별로 flops 구현할 때 batch_counter = 1로 만들어주어야 error 발생 X
+    # print("self.__batch_counter__")
+    # print(self.__batch_counter__)
+    self.__batch_counter__=1
     return forward_flops_sum / self.__batch_counter__, backward_flops_sum / self.__batch_counter__, params_sum, fc_params_sum, buffers_sum
 
 def start_backward_flops_count(self, **kwargs):
@@ -589,6 +677,7 @@ def reset_flops_count(self):
 
 # ---- Internal functions
 def batch_counter_hook(module, input, output):
+    print("input shape", len(input[0]))
     batch_size = 1
     if len(input) > 0:
         # Can have multiple inputs, getting the first one

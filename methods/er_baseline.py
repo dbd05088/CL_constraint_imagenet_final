@@ -127,7 +127,7 @@ class ER:
 
     def get_total_flops(self):
         return self.total_flops
-
+    '''
     def get_flops_parameter(self):
         self.dataset
         _, _, _, inp_size, inp_channel = get_statistics(dataset=self.dataset)
@@ -164,6 +164,73 @@ class ER:
         self.group3_backward_flops = group3_backward_mac / 10e9
         self.group4_backward_flops = group4_backward_mac / 10e9
         self.comp_backward_flops = [self.initial_backward_flops, self.group1_backward_flops, self.group2_backward_flops, self.group3_backward_flops, self.group4_backward_flops]
+
+        self.params = params / 10e9
+        self.fc_params = fc_params / 10e9
+        self.buffers = buffers / 10e9
+    '''
+
+    def get_flops_parameter(self):
+        self.dataset
+        _, _, _, inp_size, inp_channel = get_statistics(dataset=self.dataset)
+        [forward_mac, backward_mac, params, fc_params, buffers], \
+        [initial_block_forward_mac, initial_block_backward_mac, initial_block_params],\
+        [group1_block0_forward_mac, group1_block0_backward_mac, group1_block0_params],\
+        [group1_block1_forward_mac, group1_block1_backward_mac, group1_block1_params],\
+        [group2_block0_forward_mac, group2_block0_backward_mac, group2_block0_params],\
+        [group2_block1_forward_mac, group2_block1_backward_mac, group2_block1_params],\
+        [group3_block0_forward_mac, group3_block0_backward_mac, group3_block0_params],\
+        [group3_block1_forward_mac, group3_block1_backward_mac, group3_block1_params],\
+        [group4_block0_forward_mac, group4_block0_backward_mac, group4_block0_params],\
+        [group4_block1_forward_mac, group4_block1_backward_mac, group4_block1_params],\
+        [fc_forward_mac, fc_backward_mac, _] = get_model_complexity_info(self.model, (inp_channel, inp_size, inp_size), as_strings=False,
+                                           print_per_layer_stat=False, verbose=True, criterion = self.criterion, original_opt=self.optimizer, opt_name = self.opt_name, lr=self.lr)
+
+        # flops = float(mac) * 2 # mac은 string 형태
+        print("forward mac", forward_mac, "backward mac", backward_mac, "params", params, "fc_params", fc_params, "buffers", buffers)
+        print("initial forward mac", initial_block_forward_mac, "initial backward mac", initial_block_backward_mac, "initial params", initial_block_params)
+        print("group1 block0 forward mac", group1_block0_forward_mac, "group1 block0 backward mac", group1_block0_backward_mac, "group1 block0 params", group1_block0_params)
+        print("group1 block1 forward mac", group1_block1_forward_mac, "group1 block1 backward mac", group1_block1_backward_mac, "group1 block1 params", group1_block1_params)
+        print("group2 block0 forward mac", group2_block0_forward_mac, "group2 block0 backward mac", group2_block0_backward_mac, "group2 block0 params", group2_block0_params)
+        print("group2 block1 forward mac", group2_block1_forward_mac, "group2 block1 backward mac", group2_block1_backward_mac, "group2 block1 params", group2_block1_params)
+        print("group3 block0 forward mac", group3_block0_forward_mac, "group3 block0 backward mac", group3_block0_backward_mac, "group3 block0 params", group3_block0_params)
+        print("group3 block1 forward mac", group3_block1_forward_mac, "group3 block1 backward mac", group3_block1_backward_mac, "group3 block1 params", group3_block1_params)
+        print("group4 block0 forward mac", group4_block0_forward_mac, "group4 block0 backward mac", group4_block0_backward_mac, "group4 block0 params", group4_block0_params)
+        print("group4 block1 forward mac", group4_block1_forward_mac, "group4 block1 backward mac", group4_block1_backward_mac, "group4 block1 params", group4_block1_params)
+        print("fc forward mac", fc_forward_mac, "fc backward mac", fc_backward_mac, "fc params", fc_params)
+
+        self.forward_flops = forward_mac / 10e9
+        self.initial_forward_flops = initial_block_forward_mac / 10e9
+        self.group1_block0_forward_flops = group1_block0_forward_mac / 10e9
+        self.group2_block0_forward_flops = group2_block0_forward_mac / 10e9
+        self.group3_block0_forward_flops = group3_block0_forward_mac / 10e9
+        self.group4_block0_forward_flops = group4_block0_forward_mac / 10e9
+        self.group1_block1_forward_flops = group1_block1_forward_mac / 10e9
+        self.group2_block1_forward_flops = group2_block1_forward_mac / 10e9
+        self.group3_block1_forward_flops = group3_block1_forward_mac / 10e9
+        self.group4_block1_forward_flops = group4_block1_forward_mac / 10e9
+        self.fc_forward_flops = fc_forward_mac / 10e9
+
+        self.backward_flops = backward_mac / 10e9
+        self.initial_backward_flops = initial_block_backward_mac / 10e9
+        self.group1_block0_backward_flops = group1_block0_backward_mac / 10e9
+        self.group2_block0_backward_flops = group2_block0_backward_mac / 10e9
+        self.group3_block0_backward_flops = group3_block0_backward_mac / 10e9
+        self.group4_block0_backward_flops = group4_block0_backward_mac / 10e9
+        self.group1_block1_backward_flops = group1_block1_backward_mac / 10e9
+        self.group2_block1_backward_flops = group2_block1_backward_mac / 10e9
+        self.group3_block1_backward_flops = group3_block1_backward_mac / 10e9
+        self.group4_block1_backward_flops = group4_block1_backward_mac / 10e9
+        self.fc_backward_flops = fc_backward_mac / 10e9
+    
+        self.comp_backward_flops = [
+            self.initial_backward_flops,
+            self.group1_block0_backward_flops, self.group1_block1_backward_flops,
+            self.group2_block0_backward_flops, self.group2_block1_backward_flops,
+            self.group3_block0_backward_flops, self.group3_block1_backward_flops,
+            self.group4_block0_backward_flops, self.group4_block1_backward_flops,
+            self.fc_backward_flops
+            ]
 
         self.params = params / 10e9
         self.fc_params = fc_params / 10e9
