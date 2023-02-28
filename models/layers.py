@@ -27,6 +27,7 @@ class ConvBlock(nn.Module):
         groups=1,
         last=False
     ):
+        self.input_scale = 0.0
         super(ConvBlock, self).__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -68,6 +69,7 @@ class ConvBlock(nn.Module):
         self.block = nn.Sequential(*layer)
 
     def forward(self, input):
+        self.input_scale = (input.clone().detach()**2).sum(dim=(2, 3)).mean(dim=(0, 1)).item()
         return self.block.forward(input)
 
 
