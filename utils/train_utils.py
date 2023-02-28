@@ -390,6 +390,7 @@ def get_data_loader(opt_dict, dataset, pre_train=False):
     return train_loader, test_loader
 
 def select_model(model_name, dataset, num_classes=None, opt_dict=None):
+    model_imagenet = False
     opt = edict(
         {
             "depth": 18,
@@ -411,7 +412,9 @@ def select_model(model_name, dataset, num_classes=None, opt_dict=None):
     elif "cifar" in dataset:
         model_class = getattr(cifar, "ResNet")
     elif "imagenet" in dataset:
-        model_class = getattr(imagenet, "ResNet")
+        #model_class = getattr(imagenet, "ResNet")
+        model_imagenet=True
+        model_class = getattr(cifar, "ResNet")
     else:
         raise NotImplementedError(
             "Please select the appropriate datasets (mnist, cifar10, cifar100, imagenet)"
@@ -429,7 +432,7 @@ def select_model(model_name, dataset, num_classes=None, opt_dict=None):
             "Please choose the model name in [resnet18, resnet32, resnet34]"
         )
 
-    model = model_class(opt)
+    model = model_class(opt, model_imagenet)
 
     # TODO initial check
     initial = False

@@ -74,6 +74,8 @@ class CLManagerBase:
         self.cutmix = "cutmix" in kwargs["transforms"]
 
         self.model = select_model(self.model_name, self.dataset, 1).to(self.device)
+        print("model")
+        print(self.model)
         self.optimizer = select_optimizer(self.opt_name, self.lr, self.model)
         self.scheduler = select_scheduler(self.sched_name, self.optimizer)
 
@@ -518,6 +520,7 @@ class CLManagerBase:
               group4_block0_backward_mac, "group4 block0 params", group4_block0_params)
         print("group4 block1 forward mac", group4_block1_forward_mac, "group4 block1 backward mac",
               group4_block1_backward_mac, "group4 block1 params", group4_block1_params)
+
         print("fc forward mac", fc_forward_mac, "fc backward mac", fc_backward_mac, "fc params", fc_params)
 
         self.forward_flops = forward_mac / 10e9
@@ -556,7 +559,6 @@ class CLManagerBase:
         self.params = params / 10e9
         self.fc_params = fc_params / 10e9
         self.buffers = buffers / 10e9
-
 
 
 class MemoryBase:

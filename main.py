@@ -143,10 +143,12 @@ def main():
         random.shuffle(test_datalist)
         test_datalist = test_datalist[:2000]
 
+    #train_datalist = train_datalist[:5000] + train_datalist[10000:15000]
+
     for i, data in enumerate(train_datalist):
 
         # explicit task boundary for twf
-        if samples_cnt % args.samples_per_task == 0 and args.mode == "bic":
+        if samples_cnt % args.samples_per_task == 0 and (args.mode == "bic" or args.mode == "ewc++"):
             method.online_before_task(task_id)
             task_id += 1
 
