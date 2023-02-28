@@ -3,6 +3,7 @@ import logging
 from methods.er_new import ER
 from methods.baseline_new import BASELINE
 from methods.sdp_new import SDP
+from methods.ours_new import Ours
 
 logger = logging.getLogger()
 
@@ -58,6 +59,13 @@ def select_method(args, train_datalist, test_datalist, device):
     #     )
     elif args.mode == "sdp":
         method = SDP(
+            train_datalist=train_datalist,
+            test_datalist=test_datalist,
+            device=device,
+            **kwargs,
+        )
+    elif args.mode == "ours":
+        method = Ours(
             train_datalist=train_datalist,
             test_datalist=test_datalist,
             device=device,
