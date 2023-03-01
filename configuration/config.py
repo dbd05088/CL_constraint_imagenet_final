@@ -126,7 +126,6 @@ def base_parser():
     parser.add_argument("--note", type=str, help="Short description of the exp")
 
     # Eval period
-    parser.add_argument("--val_period", type=int, default=50, help="validation period for true online setup")
     parser.add_argument("--eval_period", type=int, default=100, help="evaluation period for true online setup")
     parser.add_argument("--use_kornia", action="store_true", help="enable kornia")
     parser.add_argument("--transform_on_worker", action="store_false", help="transform_on_worker")
@@ -134,21 +133,13 @@ def base_parser():
     parser.add_argument("--online_iter", type=float, default=1, help="number of model updates per samples seen.")
 
     # Ours
+    parser.add_argument("--temperature", type=float, default=0.5)
+    parser.add_argument("--corr_warm_up", type=int, default=50)
     parser.add_argument("--unfreeze_rate", type=float, default=0.25)
-    parser.add_argument("--min_p", type=float, default=0.1)
-    parser.add_argument("--max_p", type=float, default=0.6)
     parser.add_argument("--freeze_warmup", type=int, default=100)
     parser.add_argument("--target_layer", type=str, default="whole_conv2")
     parser.add_argument("--use_weight", type=str, default="classwise")
-    parser.add_argument("--max_validation_interval", type=int, default=3000)
-    parser.add_argument("--min_validation_interval", type=int, default=300)
-    parser.add_argument("--threshold_coeff", type=float, default=0.2)
-    parser.add_argument("--unfreeze_coeff", type=int, default=10)
-    parser.add_argument("--threshold_policy", type=str, default="block")
     parser.add_argument("--version", type=str, default="ver2")
-    parser.add_argument("--interval", type=int, default=3)
-    parser.add_argument("--threshold", type=float, default=1e-4)
-    parser.add_argument("--unfreeze_threshold", type=float, default=1e-3)
     parser.add_argument("--klass_warmup", type=int, default=300)
     parser.add_argument("--use_class_balancing", type=bool, default=False)
     parser.add_argument("--use_batch_cutmix", type=bool, default=False)

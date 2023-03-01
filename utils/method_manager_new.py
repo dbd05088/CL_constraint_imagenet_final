@@ -5,7 +5,7 @@ from methods.baseline_new import BASELINE
 from methods.sdp_new import SDP
 from methods.der_new import DER
 from methods.ours_new import Ours
-
+from methods.aser_new import ASER
 logger = logging.getLogger()
 
 
@@ -20,6 +20,13 @@ def select_method(args, train_datalist, test_datalist, device):
         )
     elif args.mode == "baseline":
         method = BASELINE(
+            train_datalist=train_datalist,
+            test_datalist=test_datalist,
+            device=device,
+            **kwargs,
+        )
+    elif args.mode == "aser":
+        method = ASER(
             train_datalist=train_datalist,
             test_datalist=test_datalist,
             device=device,

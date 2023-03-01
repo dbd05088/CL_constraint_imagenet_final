@@ -30,7 +30,7 @@ class CLManagerBase:
         self.sigma = kwargs["sigma"]
         self.repeat = kwargs["repeat"]
         self.init_cls = kwargs["init_cls"]
-
+        
         self.memory_size = kwargs["memory_size"]
         self.online_iter = kwargs["online_iter"]
 
@@ -123,6 +123,7 @@ class CLManagerBase:
         self.writer = SummaryWriter(f'tensorboard/{self.dataset}/{self.note}/seed_{self.rnd_seed}')
 
 
+    # Memory 새로 정의 (not MemoryBase)
     def initialize_future(self):
         self.data_stream = iter(self.train_datalist)
         self.dataloader = MultiProcessLoader(self.n_worker, self.cls_dict, self.train_transform, self.data_dir, self.transform_on_gpu, self.cpu_transform, self.device, self.use_kornia, self.transform_on_worker)
@@ -143,6 +144,7 @@ class CLManagerBase:
         self.future_retrieval = True
 
         self.waiting_batch = []
+        # 미리 future step만큼의 batch를 load
         for i in range(self.future_steps):
             self.load_batch()
 
@@ -169,11 +171,14 @@ class CLManagerBase:
     def update_memory(self, sample):
         pass
 
+    # loader로부터 load된 batch를 받아오는 것
     def get_batch(self):
         batch = self.dataloader.get_batch()
         self.load_batch()
         return batch
 
+    # stream 또는 memory를 활용해서 batch를 load해라
+    # data loader에 batch를 전달해주는 함수
     def load_batch(self):
         stream_end = False
         while len(self.waiting_batch) == 0:
@@ -573,7 +578,8 @@ class MemoryBase:
         self.cls_list = []
         self.cls_count = []
         self.cls_idx = []
-
+        self.usage_count = []
+        self.class_usage_count = []
         self.current_images = []
         self.current_labels = []
         self.current_cls_count = [0 for _ in self.cls_list]
@@ -602,6 +608,7 @@ class MemoryBase:
         self.cls_list.append(class_name)
         self.cls_count.append(0)
         self.cls_idx.append([])
+        self.class_usage_count.append(0)
 
     def retrieval(self, size):
         sample_size = min(size, len(self.images))
