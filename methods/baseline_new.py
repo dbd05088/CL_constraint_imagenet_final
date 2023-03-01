@@ -34,6 +34,20 @@ class BASELINE(CLManagerBase):
         self.future_sample_num += 1
         return 0
 
+    def online_step(self, sample, sample_num, n_worker):
+        if sample['klass'] not in self.exposed_classes:
+            self.add_new_class(sample['klass'])
+            self.writer.add_scalar(f"train/add_new_class", 1, sample_num)
+        else:
+            self.writer.add_scalar(f"train/add_new_class", 0, sample_num)
+        
+        self.num_updates += self.online_iter
+        if self.num_updates >= 1:
+            train_loss, train_acc = self.online_train(iterations=int(self.num_updates))
+            self.report_training(sample_num, train_loss, train_acc)
+            self.num_updates -= int(self.num_updates)
+            self.update_schedule()
+
     def generate_waiting_batch(self, iterations):
         for i in range(iterations):
             self.waiting_batch.append(self.memory.retrieval(self.memory_batch_size))
