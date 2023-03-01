@@ -6,6 +6,7 @@ import queue
 
 import PIL
 import numpy as np
+from utils.augment import DataAugmentation, Preprocess, get_statistics
 
 IS_WINDOWS = sys.platform == "win32"
 TIMEOUT = 5.0
@@ -64,8 +65,19 @@ def load_data(sample, data_dir, transform=None):
     return image
 
 @torch.no_grad()
-def worker_loop(index_queue, data_queue, data_dir, transform, transform_on_gpu=False, cpu_transform=None, device='cpu'):
+def worker_loop(index_queue, data_queue, data_dir, transform, transform_on_gpu=False, cpu_transform=None, device='cpu', use_kornia=False):
     watchdog = ManagerWatchdog()
+    if use_kornia:
+        if 'cifar100' in data_dir:
+            mean, std, n_classes, inp_size, _ = get_statistics(dataset='cifar100')
+        elif 'cifar10' in data_dir:
+            mean, std, n_classes, inp_size, _ = get_statistics(dataset='cifar10')
+        elif 'tinyimagenet' in data_dir:
+            mean, std, n_classes, inp_size, _ = get_statistics(dataset='tinyimagenet')
+        elif 'imagenet' in data_dir:
+            mean, std, n_classes, inp_size, _ = get_statistics(dataset='imagenet')
+        preprocess = Preprocess(inp_size)
+        kornia_randaug = DataAugmentation(inp_size, mean, std)
     while watchdog.is_alive():
         try:
             r = index_queue.get(timeout=TIMEOUT)
@@ -76,12 +88,19 @@ def worker_loop(index_queue, data_queue, data_dir, transform, transform_on_gpu=F
         labels = []
         if len(r) > 0:
             for sample in r:
-                if transform_on_gpu:
+                if use_kornia:
+                    img_name = sample["file_name"]
+                    img_path = os.path.join(data_dir, img_name)
+                    image = PIL.Image.open(img_path).convert("RGB")
+                    images.append(preprocess(image))
+                elif transform_on_gpu:
                     images.append(load_data(sample, data_dir, cpu_transform))
                 else:
                     images.append(load_data(sample, data_dir, transform))
                 labels.append(sample["label"])
-            if transform_on_gpu:
+            if use_kornia:
+                images = kornia_randaug(torch.stack(images).to(device))
+            elif transform_on_gpu:
                 images = transform(torch.stack(images).to(device))
             else:
                 images = torch.stack(images).to(device)

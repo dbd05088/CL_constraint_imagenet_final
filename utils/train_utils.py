@@ -16,7 +16,6 @@ import torch.nn as nn
 from torch import Tensor
 from utils.my_augment import Kornia_Randaugment
 from torchvision import transforms
-from utils.data_loader import Preprocess 
 from tqdm import tqdm
 
 def cycle(iterable):
@@ -55,7 +54,6 @@ class DataAugmentation(nn.Module):
 
     @torch.no_grad()  # disable gradients for effiency
     def forward(self, x: Tensor, labels=None) -> Tensor:
-
         #if labels is None or len(self.randaugmentation.cls_num_ops) == 0:
         additional_aug = self.randaugmentation.form_transforms()
         self.transforms = nn.Sequential(
