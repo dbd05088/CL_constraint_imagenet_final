@@ -102,7 +102,7 @@ def base_parser():
     parser.add_argument(
         "--transforms",
         nargs="*",
-        default=['cutmix', 'randaug'],
+        default=['randaug'],
         help="Additional train transforms [cutmix, cutout, randaug]",
     )
 
@@ -128,11 +128,12 @@ def base_parser():
     # Eval period
     parser.add_argument("--val_period", type=int, default=50, help="validation period for true online setup")
     parser.add_argument("--eval_period", type=int, default=100, help="evaluation period for true online setup")
-    parser.add_argument("--use_kornia", type=bool, default=True, help="disable kornia")
+    parser.add_argument("--use_kornia", action="store_true", help="enable kornia")
     parser.add_argument("--temp_batchsize", type=int, help="temporary batch size, for true online")
     parser.add_argument("--online_iter", type=float, default=1, help="number of model updates per samples seen.")
 
     # Ours
+    parser.add_argument("--unfreeze_rate", type=float, default=0.25)
     parser.add_argument("--min_p", type=float, default=0.1)
     parser.add_argument("--max_p", type=float, default=0.6)
     parser.add_argument("--freeze_warmup", type=int, default=100)

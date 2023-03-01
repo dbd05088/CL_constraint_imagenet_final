@@ -25,7 +25,7 @@ logger = logging.getLogger()
 
 
 class MultiProcessLoader():
-    def __init__(self, n_workers, cls_dict, transform, data_dir, transform_on_gpu=False, cpu_transform=None, device='cpu'):
+    def __init__(self, n_workers, cls_dict, transform, data_dir, transform_on_gpu=False, cpu_transform=None, device='cpu', use_kornia=False):
         self.n_workers = n_workers
         self.cls_dict = cls_dict
         self.transform = transform
@@ -40,7 +40,7 @@ class MultiProcessLoader():
             index_queue.cancel_join_thread()
             result_queue = multiprocessing.Queue()
             result_queue.cancel_join_thread()
-            w = multiprocessing.Process(target=worker_loop, args=(index_queue, result_queue, data_dir, self.transform, self.transform_on_gpu, self.cpu_transform, self.device))
+            w = multiprocessing.Process(target=worker_loop, args=(index_queue, result_queue, data_dir, self.transform, self.transform_on_gpu, self.cpu_transform, self.device, use_kornia))
             w.daemon = True
             w.start()
             self.workers.append(w)
@@ -1633,8 +1633,12 @@ def get_train_datalist(dataset, sigma, repeat, init_cls, rnd_seed):
     return train_list['stream'], train_list['cls_dict'], train_list['cls_addition']
 
 def get_test_datalist(dataset) -> List:
-    print("test name", f"collections/{dataset}/{dataset}_val2.json")
-    return pd.read_json(f"collections/{dataset}/{dataset}_val2.json").to_dict(orient="records")
+    try:
+        print("test name", f"collections/{dataset}/{dataset}_val.json")
+        return pd.read_json(f"collections/{dataset}/{dataset}_val.json").to_dict(orient="records")
+    except:
+        print("test name", f"collections/{dataset}/{dataset}_val2.json")
+        return pd.read_json(f"collections/{dataset}/{dataset}_val2.json").to_dict(orient="records")
 
 
 def get_statistics(dataset: str):

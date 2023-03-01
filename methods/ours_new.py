@@ -1,34 +1,20 @@
 # When we make a new one, we should inherit the Finetune class.
 import logging
 import copy
+from operator import attrgetter
 import time
 import datetime
 import random
 import numpy as np
-import pandas as pd
-import torch.nn.functional as F
-from scipy import stats
 import torch
-import pickle
-import math
-from collections import OrderedDict
-from sklearn.linear_model import LinearRegression
+
 import torch.nn as nn
-from utils.cka import linear_CKA
-from torch.utils.data import DataLoader
-from torch.utils.tensorboard import SummaryWriter
-from torch import optim
-from scipy.stats import chi2, norm
-#from ptflops import get_model_complexity_info
-from flops_counter.ptflops import get_model_complexity_info
-from collections import Counter
+import torch.nn.functional as F
+
 from methods.cl_manager import CLManagerBase, MemoryBase
-from utils.data_loader import ImageDataset, StreamDataset, MemoryDataset, cutmix_data, MultiProcessLoader
-from utils.train_utils import select_model, select_optimizer, select_scheduler
-from utils.focal_loss import FocalLoss
-from utils import autograd_hacks
+from utils.data_loader import cutmix_data, MultiProcessLoader
 logger = logging.getLogger()
-#writer = SummaryWriter("tensorboard")
+# writer = SummaryWriter("tensorboard")
 
 
 class Ours(CLManagerBase):
@@ -62,7 +48,6 @@ class Ours(CLManagerBase):
         self.weight_ema_ratio = kwargs["weight_ema_ratio"]
         self.use_batch_cutmix = kwargs["use_batch_cutmix"]
         self.device = device
-        self.line_fitter = LinearRegression()
         self.klass_warmup = kwargs["klass_warmup"]
         self.loss_balancing_option = kwargs["loss_balancing_option"]
         self.grad_cls_score_mavg = {}
@@ -75,11 +60,6 @@ class Ours(CLManagerBase):
         self.T = 0.5
         self.min_p = kwargs["min_p"]
         self.max_p = kwargs["max_p"]
-        
-        # Information based freezing
-        self.fisher_ema_ratio = 0.01
-        self.fisher = {n: torch.zeros_like(p) for n, p in list(self.model.named_parameters())[:-2] if p.requires_grad}
-        self.cumulative_fisher = []
 
         # for gradient subsampling
         self.grad_score_per_layer = None 
@@ -111,6 +91,8 @@ class Ours(CLManagerBase):
         # print("self.selected_mask.keys()")
         # print(self.selected_mask.keys())
 
+        self.last_grad_mean = 0.0
+
         self.grad_mavg = []
         self.grad_mavgsq = []
         self.grad_mvar = []
@@ -119,8 +101,18 @@ class Ours(CLManagerBase):
         self.grad_ema_ratio = 0.01
 
         # Information based freezing
+        self.unfreeze_rate = kwargs["unfreeze_rate"]
+        # Information based freezing
         self.fisher_ema_ratio = 0.01
-        self.fisher = {n: torch.zeros_like(p) for n, p in list(self.model.named_parameters())[:-2] if p.requires_grad}
+        if self.model_name == 'resnet18':
+            self.num_blocks = 9
+            self.fisher = [0.0 for _ in range(9)]
+        else:
+            raise NotImplementedError("Layer blocks for Fisher Information calculation not defined")
+        self.cumulative_fisher = []
+        self.frozen = False
+
+
         self.cumulative_fisher = []
 
         self.klass_train_warmup = kwargs["klass_train_warmup"]
@@ -141,7 +133,7 @@ class Ours(CLManagerBase):
 
     def initialize_future(self):
         self.data_stream = iter(self.train_datalist)
-        self.dataloader = MultiProcessLoader(self.n_worker, self.cls_dict, self.train_transform, self.data_dir, self.transform_on_gpu, self.cpu_transform, self.device)
+        self.dataloader = MultiProcessLoader(self.n_worker, self.cls_dict, self.train_transform, self.data_dir, self.transform_on_gpu, self.cpu_transform, self.device, self.use_kornia)
         self.memory = OurMemory(self.memory_size)
 
         self.memory_list = []
@@ -191,10 +183,13 @@ class Ours(CLManagerBase):
         return result
 
     def unfreeze_layers(self):
+        self.frozen = False
         for name, param in self.model.named_parameters():
             param.requires_grad = True
 
     def freeze_layers(self):
+        if len(self.freeze_idx) > 0:
+            self.frozen = True
         for i in self.freeze_idx:
             if i==0:
                 # freeze initial block
@@ -202,10 +197,7 @@ class Ours(CLManagerBase):
                     if "initial" in name:
                         param.requires_grad = False
                 continue
-            if self.target_layer == "last_conv2":
-                self.freeze_layer(i-1)
-            elif self.target_layer == "whole_conv2":
-                self.freeze_layer((i-1)//2, (i-1)%2)
+            self.freeze_layer((i-1)//2, (i-1)%2)
 
     def freeze_layer(self, layer_index, block_index=None):
         # group(i)가 들어간 layer 모두 freeze
@@ -313,6 +305,11 @@ class Ours(CLManagerBase):
 
             logit, loss = self.model_forward(x, y)
 
+            if self.train_count > 2:
+                self.get_freeze_idx(logit.detach(), y)
+                if np.random.rand() > self.unfreeze_rate:
+                    self.freeze_layers()
+
             _, preds = logit.topk(self.topk, 1, True, True)
             
             loss.backward()
@@ -323,8 +320,8 @@ class Ours(CLManagerBase):
             
             # if self.sample_num >= self.corr_warm_up:
             #     self.update_correlation(y)
-
-            self.calculate_fisher()
+            if not self.frozen:
+                self.calculate_fisher()
 
             # autograd_hacks.clear_backprops(self.model)
             
@@ -351,19 +348,14 @@ class Ours(CLManagerBase):
         return total_loss / iterations, correct / num_data
 
 
-    def before_model_update(self):
-        if self.train_count > 100:
-            self.get_freeze_idx()
-            if np.random.rand() > 0.1:
-                self.freeze_layers()
-
     def after_model_update(self):
         self.train_count += 1
 
     def get_backward_flops(self):
         backward_flops = self.backward_flops
-        for i in self.freeze_idx:
-            backward_flops -= self.comp_backward_flops[i]
+        if self.frozen:
+            for i in self.freeze_idx:
+                backward_flops -= self.comp_backward_flops[i]
         return backward_flops
 
     def model_forward(self, x, y):
@@ -487,105 +479,67 @@ class Ours(CLManagerBase):
         corr_coeff = torch.corrcoef(tensor_list)
         print(corr_coeff)
 
+    def get_layer_number(self, n):
+        name = n.split('.')
+        if name[0] == 'initial':
+            return 0
+        elif 'group' in name[0]:
+            group_num = int(name[0][-1])
+            block_num = int(name[2][-1])
+            return group_num * 2 + block_num - 1
 
     # Hyunseo : Information based freeezing
     def calculate_fisher(self):
-        group_fisher = [[] for _ in range(9)]
-        for n, p in self.model.named_parameters():
-            if n in self.fisher.keys():
-                if p.requires_grad is True and p.grad is not None:
-                    if not p.grad.isnan().any():
-                        self.fisher[n] += self.fisher_ema_ratio * (p.grad.clone().detach().clamp(-1000, 1000) ** 2 - self.fisher[n])
-                if 'initial' in n:
-                    group_fisher[0].append(self.fisher[n].sum().item()/self.model.initial.input_scale)
-                elif 'group1' in n:
-                    if 'block0' in n:
-                        if 'conv1' in n:
-                            group_fisher[1].append(self.fisher[n].sum().item()/self.model.group1.blocks.block0.conv1.input_scale)
-                        else:
-                            group_fisher[1].append(
-                                self.fisher[n].sum().item() / self.model.group1.blocks.block0.conv2.input_scale)
-                    else:
-                        if 'conv1' in n:
-                            group_fisher[2].append(self.fisher[n].sum().item()/self.model.group1.blocks.block1.conv1.input_scale)
-                        else:
-                            group_fisher[2].append(
-                                self.fisher[n].sum().item() / self.model.group1.blocks.block1.conv2.input_scale)
-                elif 'group2' in n:
-                    if 'block0' in n:
-                        if 'conv1' in n:
-                            group_fisher[3].append(
-                                self.fisher[n].sum().item() / self.model.group2.blocks.block0.conv1.input_scale)
-                        elif 'conv2' in n:
-                            group_fisher[3].append(
-                                self.fisher[n].sum().item() / self.model.group2.blocks.block0.conv2.input_scale)
-                        else:
-                            group_fisher[3].append(
-                                self.fisher[n].sum().item() / self.model.group2.blocks.block0.downsample.input_scale)
-                    else:
-                        if 'conv1' in n:
-                            group_fisher[4].append(
-                                self.fisher[n].sum().item() / self.model.group2.blocks.block1.conv1.input_scale)
-                        else:
-                            group_fisher[4].append(
-                                self.fisher[n].sum().item() / self.model.group2.blocks.block1.conv2.input_scale)
-                elif 'group3' in n:
-                    if 'block0' in n:
-                        if 'conv1' in n:
-                            group_fisher[5].append(
-                                self.fisher[n].sum().item() / self.model.group3.blocks.block0.conv1.input_scale)
-                        elif 'conv2' in n:
-                            group_fisher[5].append(
-                                self.fisher[n].sum().item() / self.model.group3.blocks.block0.conv2.input_scale)
-                        else:
-                            group_fisher[5].append(
-                                self.fisher[n].sum().item() / self.model.group3.blocks.block0.downsample.input_scale)
-                    else:
-                        if 'conv1' in n:
-                            group_fisher[6].append(
-                                self.fisher[n].sum().item() / self.model.group3.blocks.block1.conv1.input_scale)
-                        else:
-                            group_fisher[6].append(
-                                self.fisher[n].sum().item() / self.model.group3.blocks.block1.conv2.input_scale)
-                elif 'group4' in n:
-                    if 'block0' in n:
-                        if 'conv1' in n:
-                            group_fisher[7].append(
-                                self.fisher[n].sum().item() / self.model.group4.blocks.block0.conv1.input_scale)
-                        elif 'conv2' in n:
-                            group_fisher[7].append(
-                                self.fisher[n].sum().item() / self.model.group4.blocks.block0.conv2.input_scale)
-                        else:
-                            group_fisher[7].append(
-                                self.fisher[n].sum().item() / self.model.group4.blocks.block0.downsample.input_scale)
-                    else:
-                        if 'conv1' in n:
-                            group_fisher[8].append(
-                                self.fisher[n].sum().item() / self.model.group4.blocks.block1.conv1.input_scale)
-                        else:
-                            group_fisher[8].append(
-                                self.fisher[n].sum().item() / self.model.group4.blocks.block1.conv2.input_scale)
-        group_fisher_sum = [sum(fishers) for fishers in group_fisher]
-        self.total_fisher = sum(group_fisher_sum)
-        self.cumulative_fisher = [sum(group_fisher_sum[0:i+1]) for i in range(9)]
+        group_fisher = [0.0 for _ in range(self.num_blocks)]
+        for n, p in list(self.model.named_parameters())[:-2]:
+            layer_num = self.get_layer_number(n)
+            if p.requires_grad is True and p.grad is not None:
+                if not p.grad.isnan().any():
+                    block_name = '.'.join(n.split('.')[:-3])
+                    get_attr = attrgetter(block_name)
+                    group_fisher[layer_num] += (p.grad.clone().detach().clamp(-1000, 1000) ** 2).sum().item()/get_attr(self.model).input_scale
+                    self.total_flops += (len(p.grad.clone().detach().flatten())*2+get_attr(self.model).input_size*2) / 10e9
+
+        for i in range(self.num_blocks):
+            if i not in self.freeze_idx or not self.frozen:
+                self.fisher[i] += self.fisher_ema_ratio * (group_fisher[i] - self.fisher[i])
+        self.total_fisher = sum(self.fisher)
+        self.cumulative_fisher = [sum(self.fisher[0:i+1]) for i in range(9)]
 
     def get_flops_parameter(self):
         super().get_flops_parameter()
         self.cumulative_backward_flops = [sum(self.comp_backward_flops[0:i+1]) for i in range(9)]
         self.total_model_flops = self.forward_flops + self.backward_flops
 
-    def get_freeze_idx(self):
+    def get_freeze_idx(self, logit, label):
+        grad = self.get_grad(logit, label, self.model.fc.weight)
+        last_grad = (grad ** 2 ).sum().item()
+        self.total_flops += len(grad.clone().detach().flatten())/10e9
+        batch_freeze_score = last_grad/(self.last_grad_mean+1e-10)
+        self.last_grad_mean += self.fisher_ema_ratio * (last_grad - self.last_grad_mean)
         freeze_score = []
         freeze_score.append(1)
         for i in range(9):
-            freeze_score.append(self.total_model_flops/(self.total_model_flops - self.cumulative_backward_flops[i])*(self.total_fisher - self.cumulative_fisher[i])/(self.total_fisher+1e-5))
-        optimal_freeze = np.argmax(freeze_score)
-        # print("cumulative_backward_flops")
-        # print(self.cumulative_backward_flops)
-        # print("self.cumulative_fisher")
-        # print(self.cumulative_fisher)
-        print(freeze_score, optimal_freeze)
+            freeze_score.append(self.total_model_flops / (self.total_model_flops - self.cumulative_backward_flops[i]) * (
+                        self.total_fisher - self.cumulative_fisher[i]) / (self.total_fisher + 1e-10))
+        max_score = max(freeze_score)
+        modified_score = []
+        modified_score.append(batch_freeze_score)
+        for i in range(9):
+            modified_score.append(batch_freeze_score*(self.total_fisher - self.cumulative_fisher[i])/(self.total_fisher + 1e-10) + self.cumulative_backward_flops[i]/self.total_model_flops * max_score)
+        optimal_freeze = np.argmax(modified_score)
+        print(modified_score, optimal_freeze)
         self.freeze_idx = list(range(9))[0:optimal_freeze]
+
+    def get_grad(self, logit, label, weight):
+        prob = F.softmax(logit)
+        oh_label = F.one_hot(label.long(), self.num_learned_class)
+
+        front = (prob - oh_label).shape
+        back = weight.shape
+        self.total_flops += ((front[0] * back[1] * (2 * front[1] - 1)) / 10e9)
+
+        return torch.matmul((prob - oh_label), weight)
 
 
 class OurMemory(MemoryBase):
