@@ -37,6 +37,14 @@ class Ours(CLManagerBase):
     ):
         if kwargs["temp_batchsize"] is None:
             kwargs["temp_batchsize"] = 0
+        
+        # for ours
+        self.T = kwargs["temperature"]
+        self.corr_warm_up = kwargs["corr_warm_up"]
+        self.target_layer = kwargs["target_layer"]
+        self.selected_num = 512
+        self.corr_map = {}
+        
         super().__init__(
             train_datalist, test_datalist, device, **kwargs
         )
@@ -55,8 +63,6 @@ class Ours(CLManagerBase):
         self.cos = nn.CosineSimilarity(dim=0, eps=1e-6)
         self.prev_weight_list = None
         self.sigma = kwargs["sigma"]
-        self.threshold = kwargs["threshold"]
-        self.unfreeze_threshold = kwargs["unfreeze_threshold"]
         self.repeat = kwargs["repeat"]
         self.ema_ratio = kwargs['ema_ratio']
         self.weight_ema_ratio = kwargs["weight_ema_ratio"]
@@ -66,15 +72,12 @@ class Ours(CLManagerBase):
         self.klass_warmup = kwargs["klass_warmup"]
         self.loss_balancing_option = kwargs["loss_balancing_option"]
         self.grad_cls_score_mavg = {}
-
+        self.corr_map_list = []
+        self.sample_count_list = []
+        self.labels_list=[]
         self._supported_layers = ['Linear', 'Conv2d']
-        self.target_layer = kwargs["target_layer"]
         self.freeze_warmup = 500
         self.grad_dict = {}
-        self.corr_map = {}
-        self.T = 0.5
-        self.min_p = kwargs["min_p"]
-        self.max_p = kwargs["max_p"]
         
         # Information based freezing
         self.fisher_ema_ratio = 0.01
@@ -82,14 +85,7 @@ class Ours(CLManagerBase):
         self.cumulative_fisher = []
 
         # for gradient subsampling
-        self.grad_score_per_layer = None 
-        # Hyunseo: gradient threshold
-        if self.target_layer == "whole_conv2":
-            self.target_layers = ["group1.blocks.block0.conv2.block.0.weight", "group1.blocks.block1.conv2.block.0.weight", "group2.blocks.block0.conv2.block.0.weight", "group2.blocks.block1.conv2.block.0.weight", "group3.blocks.block0.conv2.block.0.weight", "group3.blocks.block1.conv2.block.0.weight", "group4.blocks.block0.conv2.block.0.weight", "group4.blocks.block1.conv2.block.0.weight"]
-        elif self.target_layer == "last_conv2":
-            self.target_layers = ["group1.blocks.block1.conv2.block.0.weight", "group2.blocks.block1.conv2.block.0.weight", "group3.blocks.block1.conv2.block.0.weight", "group4.blocks.block1.conv2.block.0.weight"]
         
-        # self.corr_warm_up = 50
         # self.grad_mavg_base = {n: torch.zeros_like(p) for n, p in list(self.model.named_parameters())[:-2] if p.requires_grad and n in self.target_layers}
         # self.grad_mavgsq_base = {n: torch.zeros_like(p) for n, p in list(self.model.named_parameters())[:-2] if p.requires_grad and n in self.target_layers}
         # self.grad_mvar_base = {n: torch.zeros_like(p) for n, p in list(self.model.named_parameters())[:-2] if p.requires_grad and n in self.target_layers}
@@ -137,13 +133,29 @@ class Ours(CLManagerBase):
         for name, p in self.model.named_parameters():
             print(name, p.shape)
 
-        # autograd_hacks.add_hooks(self.model)
+        
 
     def initialize_future(self):
         self.data_stream = iter(self.train_datalist)
         self.dataloader = MultiProcessLoader(self.n_worker, self.cls_dict, self.train_transform, self.data_dir, self.transform_on_gpu, self.cpu_transform, self.device)
-        self.memory = OurMemory(self.memory_size)
+        self.memory = OurMemory(self.memory_size, self.T)
 
+        self.grad_score_per_layer = None 
+        # Hyunseo: gradient threshold
+        if self.target_layer == "whole_conv2":
+            self.target_layers = ["group1.blocks.block0.conv2.block.0.weight", "group1.blocks.block1.conv2.block.0.weight", "group2.blocks.block0.conv2.block.0.weight", "group2.blocks.block1.conv2.block.0.weight", "group3.blocks.block0.conv2.block.0.weight", "group3.blocks.block1.conv2.block.0.weight", "group4.blocks.block0.conv2.block.0.weight", "group4.blocks.block1.conv2.block.0.weight"]
+        elif self.target_layer == "last_conv2":
+            self.target_layers = ["group1.blocks.block1.conv2.block.0.weight", "group2.blocks.block1.conv2.block.0.weight", "group3.blocks.block1.conv2.block.0.weight", "group4.blocks.block1.conv2.block.0.weight"]
+        
+
+        autograd_hacks.add_hooks(self.model)
+        self.selected_mask = {}
+        self.grad_mavg_base = {n: torch.zeros_like(p) for n, p in list(self.model.named_parameters())[:-2] if p.requires_grad and n in self.target_layers}
+        for key in self.grad_mavg_base.keys():
+            a = self.grad_mavg_base[key].flatten()
+            selected_indices = torch.randperm(len(a))[:self.selected_num]
+            self.selected_mask[key] = selected_indices
+            
         self.memory_list = []
         self.temp_batch = []
         self.temp_future_batch = []
@@ -162,6 +174,10 @@ class Ours(CLManagerBase):
         for i in range(self.future_steps):
             self.load_batch()
 
+    def generate_waiting_batch(self, iterations, similarity_matrix=None):
+        for i in range(iterations):
+            self.waiting_batch.append(self.temp_future_batch + self.memory.retrieval(self.memory_batch_size, similarity_matrix=similarity_matrix))
+
     def memory_future_step(self):
         try:
             sample = next(self.data_stream)
@@ -170,11 +186,15 @@ class Ours(CLManagerBase):
         if sample["klass"] not in self.memory.cls_list:
             self.memory.add_new_class(sample["klass"])
             self.dataloader.add_new_class(self.memory.cls_dict)
+            self.future_add_new_class()
         self.update_memory(sample)
         self.future_num_updates += self.online_iter
 
         if  self.future_num_updates >= 1:
-            self.generate_waiting_batch(int(self.future_num_updates))
+            if self.future_sample_num >= self.corr_warm_up:
+                self.generate_waiting_batch(int(self.future_num_updates), self.corr_map)
+            else:
+                self.generate_waiting_batch(int(self.future_num_updates))
             self.future_num_updates -= int(self.future_num_updates)
         self.future_sample_num += 1
         return 0
@@ -236,9 +256,33 @@ class Ours(CLManagerBase):
             self.num_updates -= int(self.num_updates)
             self.update_schedule()
 
+
+    def future_add_new_class(self):
+        ### for calculating similarity ###
+        len_key = len(self.corr_map.keys())
+        if len_key > 1:
+            total_corr = 0.0
+            total_corr_count = 0
+            for i in range(len_key):
+                for j in range(i+1, len_key):
+                    total_corr += self.corr_map[i][j]
+                    total_corr_count += 1
+            self.initial_corr = total_corr / total_corr_count
+        else:
+            self.initial_corr = None
+        
+        for i in range(len_key):
+            # 모든 class의 avg_corr로 initialize
+            self.corr_map[i][len_key] = self.initial_corr
+            
+        # 자기 자신은 1로 initialize
+        self.corr_map[len_key] = {}
+        self.corr_map[len_key][len_key] = None
+
     def add_new_class(self, class_name, sample=None):
         print("!!add_new_class seed", self.rnd_seed)
         self.cls_dict[class_name] = len(self.exposed_classes)
+        
         # self.grad_cls_score_mavg[len(self.exposed_classes)] = copy.deepcopy(self.grad_cls_score_mavg_base)
         # self.grad_dict[len(self.exposed_classes)] = copy.deepcopy(self.grad_dict_base)
         self.exposed_classes.append(class_name)
@@ -258,6 +302,9 @@ class Ours(CLManagerBase):
 
         if 'reset' in self.sched_name:
             self.update_schedule(reset=True)
+
+        autograd_hacks.remove_hooks(self.model)
+        autograd_hacks.add_hooks(self.model)
         
         # for unfreezing model
 
@@ -272,8 +319,6 @@ class Ours(CLManagerBase):
         # self.grad_mvar.append(copy.deepcopy(self.grad_mvar_base))
         # self.grad_criterion.append(copy.deepcopy(self.grad_criterion_base))
         
-        # autograd_hacks.remove_hooks(self.model)
-        # autograd_hacks.add_hooks(self.model)
         
         # ### update similarity map ###
         # len_key = len(self.corr_map.keys())
@@ -307,8 +352,7 @@ class Ours(CLManagerBase):
             x = data["image"].to(self.device)
             y = data["label"].to(self.device)
 
-            self.before_model_update()
-
+            #self.before_model_update()
             self.optimizer.zero_grad()
 
             logit, loss = self.model_forward(x, y)
@@ -316,17 +360,21 @@ class Ours(CLManagerBase):
             _, preds = logit.topk(self.topk, 1, True, True)
             
             loss.backward()
-            # autograd_hacks.compute_grad1(self.model)
+            autograd_hacks.compute_grad1(self.model)
             
             self.optimizer.step()
-            # self.update_gradstat(self.sample_num, y)
+            #self.update_gradstat(self.sample_num, y)
             
-            # if self.sample_num >= self.corr_warm_up:
-            #     self.update_correlation(y)
+            if self.future_sample_num >= self.corr_warm_up:
+                self.update_correlation(y)
+                # for saving!
+                self.corr_map_list.append(copy.deepcopy(self.corr_map))
+                self.sample_count_list.append(copy.deepcopy(self.memory.usage_count))
+                self.labels_list.append(copy.deepcopy(self.memory.labels))
 
-            self.calculate_fisher()
+            #self.calculate_fisher()
 
-            # autograd_hacks.clear_backprops(self.model)
+            autograd_hacks.clear_backprops(self.model)
             
             total_loss += loss.item()
             correct += torch.sum(preds == y.unsqueeze(1)).item()
@@ -345,10 +393,23 @@ class Ours(CLManagerBase):
             self.freeze_idx = []
             self.after_model_update()
 
-        # print("self.corr_map")
-        # print(self.corr_map)
+        print("self.corr_map")
+        print(self.corr_map)
 
         return total_loss / iterations, correct / num_data
+
+    def online_evaluate(self, test_list, sample_num, batch_size, n_worker, cls_dict, cls_addition, data_time):
+        # store한 애들 저장
+        with open('corr_map_list.pickle', 'wb') as f:
+            pickle.dump(self.corr_map_list, f, pickle.HIGHEST_PROTOCOL)
+        
+        with open('sample_count_list.pickle', 'wb') as f:
+            pickle.dump(self.sample_count_list, f, pickle.HIGHEST_PROTOCOL)
+        
+        with open('labels_list.pickle', 'wb') as f:
+            pickle.dump(self.labels_list, f, pickle.HIGHEST_PROTOCOL)
+        
+        return super().online_evaluate(test_list, sample_num, batch_size, n_worker, cls_dict, cls_addition, data_time)
 
 
     def before_model_update(self):
@@ -423,9 +484,6 @@ class Ours(CLManagerBase):
                 stacked_tensor[i] /= norm_tensor[i]
             '''
             centered_list.append(stacked_tensor)
-        
-        print("key_list")
-        print(key_list)
         
         for i, key_i in enumerate(key_list):
             for j, key_j in enumerate(key_list):
@@ -589,13 +647,60 @@ class Ours(CLManagerBase):
 
 
 class OurMemory(MemoryBase):
-    def __init__(self, memory_size):
+    def __init__(self, memory_size, T):
         super().__init__(memory_size)
+        self.T = T
 
-    def retrieval(self, size):
+    def replace_sample(self, sample, idx=None):
+        super().replace_sample(sample, idx)
+        self.usage_count.append(0)
+    
+    # balanced probability retrieval
+    def balanced_retrieval(self, size):
         sample_size = min(size, len(self.images))
         memory_batch = []
         cls_idx = np.random.choice(len(self.cls_list), sample_size)
         for cls in cls_idx:
-            memory_batch.append(self.images[np.random.choice(self.cls_idx[cls], 1)[0]])
+            i = np.random.choice(self.cls_idx[cls], 1)[0]
+            memory_batch.append(self.images[i])
+            self.usage_count[i]+=1
+            self.class_usage_count[self.labels[i]]+=1
         return memory_batch
+
+    
+    def retrieval(self, size, similarity_matrix=None):
+        if similarity_matrix is None:
+            return self.balanced_retrieval(size)
+        else:
+            sample_size = min(size, len(self.images))
+            weight = self.get_similarity_weight(similarity_matrix)
+            sample_idx = np.random.choice(len(self.images), sample_size, p = weight)
+            memory_batch = list(np.array(self.images)[sample_idx])
+            for i in sample_idx:
+                self.usage_count[i]+=1
+                self.class_usage_count[self.labels[i]]+=1    
+            return memory_batch
+        
+    def get_similarity_weight(self, sim_matrix):
+        weight = torch.Tensor(self.usage_count)
+        #total_count = sum(self.class_usage_cnt)
+        
+        for my_klass, my_klass_count in enumerate(self.class_usage_count):
+            klass_index = np.where(my_klass == np.array(self.labels))[0]
+            x = 0
+            for other_klass, other_class_count in enumerate(self.class_usage_count):
+                if my_klass > other_klass:
+                    continue
+                min_klass = min(my_klass, other_klass)
+                max_klass = max(my_klass, other_klass)
+                if sim_matrix[min_klass][max_klass] is None:
+                    continue
+                x += (sim_matrix[min_klass][max_klass] * other_class_count)
+            weight[klass_index] += x 
+
+        total_count = sum(weight)
+        weight = torch.exp(-(weight/total_count)*self.T).double()
+        weight = F.softmax(weight, dim=0)
+        return weight
+    
+    
