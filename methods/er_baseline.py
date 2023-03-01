@@ -231,7 +231,7 @@ class ER:
             self.fc_backward_flops
             ]
 
-        self.params = params / 10e9
+        # self.params = params / 10e9
         self.fc_params = fc_params / 10e9
         self.buffers = buffers / 10e9
 

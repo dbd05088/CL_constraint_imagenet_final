@@ -19,17 +19,31 @@ from kornia.geometry.transform import resize
 from utils.augmentations import CustomRandomCrop, CustomRandomHorizontalFlip, DoubleCompose, DoubleTransform
 import torch.multiprocessing as multiprocessing
 
+from utils.augment import DataAugmentation, Preprocess, get_statistics
+
 from utils.data_worker import worker_loop
 
 logger = logging.getLogger()
 
 
 class MultiProcessLoader():
-    def __init__(self, n_workers, cls_dict, transform, data_dir, transform_on_gpu=False, cpu_transform=None, device='cpu', use_kornia=False):
+    def __init__(self, n_workers, cls_dict, transform, data_dir, transform_on_gpu=False, cpu_transform=None, device='cpu', use_kornia=False, transform_on_worker=True):
         self.n_workers = n_workers
         self.cls_dict = cls_dict
         self.transform = transform
         self.transform_on_gpu = transform_on_gpu
+        self.transform_on_worker = transform_on_worker
+        self.use_kornia = use_kornia
+        if self.use_kornia:
+            if 'cifar100' in data_dir:
+                mean, std, n_classes, inp_size, _ = get_statistics(dataset='cifar100')
+            elif 'cifar10' in data_dir:
+                mean, std, n_classes, inp_size, _ = get_statistics(dataset='cifar10')
+            elif 'tinyimagenet' in data_dir:
+                mean, std, n_classes, inp_size, _ = get_statistics(dataset='tinyimagenet')
+            elif 'imagenet' in data_dir:
+                mean, std, n_classes, inp_size, _ = get_statistics(dataset='imagenet')
+            self.transform = DataAugmentation(inp_size, mean, std)
         self.cpu_transform = cpu_transform
         self.device = device
         self.result_queues = []
@@ -40,7 +54,7 @@ class MultiProcessLoader():
             index_queue.cancel_join_thread()
             result_queue = multiprocessing.Queue()
             result_queue.cancel_join_thread()
-            w = multiprocessing.Process(target=worker_loop, args=(index_queue, result_queue, data_dir, self.transform, self.transform_on_gpu, self.cpu_transform, self.device, use_kornia))
+            w = multiprocessing.Process(target=worker_loop, args=(index_queue, result_queue, data_dir, self.transform, self.transform_on_gpu, self.cpu_transform, self.device, use_kornia, transform_on_worker))
             w.daemon = True
             w.start()
             self.workers.append(w)
@@ -68,6 +82,8 @@ class MultiProcessLoader():
                 labels.append(loaded_samples["label"])
         images = torch.cat(images)
         labels = torch.cat(labels)
+        if self.transform_on_gpu and not self.transform_on_worker:
+            images = self.transform(images.to(self.device))
         data['image'] = images
         data['label'] = labels
         return data

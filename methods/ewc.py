@@ -108,7 +108,6 @@ class EWCpp(ER):
                 y.append(memory_data['label'])
             x = torch.cat(x)
             y = torch.cat(y)
-
             x = x.to(self.device)
             y = y.to(self.device)
 

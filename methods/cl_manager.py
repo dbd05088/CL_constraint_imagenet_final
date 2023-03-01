@@ -57,6 +57,7 @@ class CLManagerBase:
         self.future_steps = kwargs["future_steps"]
         self.transform_on_gpu = kwargs["transform_on_gpu"]
         self.use_kornia = kwargs["use_kornia"]
+        self.transform_on_worker = kwargs["transform_on_worker"]
 
         self.eval_period = kwargs["eval_period"]
         self.topk = kwargs["topk"]
@@ -81,7 +82,7 @@ class CLManagerBase:
         self.scheduler = select_scheduler(self.sched_name, self.optimizer)
 
         self.data_stream = iter(self.train_datalist)
-        self.dataloader = MultiProcessLoader(self.n_worker, self.cls_dict, self.train_transform, self.data_dir, self.transform_on_gpu, self.cpu_transform, self.device, self.use_kornia)
+        self.dataloader = MultiProcessLoader(self.n_worker, self.cls_dict, self.train_transform, self.data_dir, self.transform_on_gpu, self.cpu_transform, self.device, self.use_kornia, self.transform_on_worker)
 
         self.memory = MemoryBase(self.memory_size)
         self.memory_list = []
@@ -124,7 +125,7 @@ class CLManagerBase:
 
     def initialize_future(self):
         self.data_stream = iter(self.train_datalist)
-        self.dataloader = MultiProcessLoader(self.n_worker, self.cls_dict, self.train_transform, self.data_dir, self.transform_on_gpu, self.cpu_transform, self.device)
+        self.dataloader = MultiProcessLoader(self.n_worker, self.cls_dict, self.train_transform, self.data_dir, self.transform_on_gpu, self.cpu_transform, self.device, self.use_kornia, self.transform_on_worker)
         self.memory = MemoryBase(self.memory_size)
 
         self.memory_list = []
