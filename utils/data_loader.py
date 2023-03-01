@@ -53,6 +53,7 @@ class MultiProcessLoader():
     def load_batch(self, batch):
         for sample in batch:
             sample["label"] = self.cls_dict[sample["klass"]]
+            
         for i in range(self.n_workers):
             self.index_queues[i].put(batch[len(batch)*i//self.n_workers:len(batch)*(i+1)//self.n_workers])
 
@@ -71,6 +72,7 @@ class MultiProcessLoader():
         data['image'] = images
         data['label'] = labels
         return data
+    
 
 def nonzero_indices(bool_mask_tensor):
     # Returns tensor which contains indices of nonzero elements in bool_mask_tensor
@@ -1339,14 +1341,6 @@ class ASERMemory(MemoryDataset):
             images = []
             labels = []
             for i in candidate_indices:
-                #TODO Transform??
-                '''
-                transform이 원래 aser에서는 그저 ToTensor만 해줌
-                shape value 구할 때 transform 영향 없게 하려고 그런것 같은데.. 
-                우리꺼에서는 그럼 test transform해서 shape value 한번 구하고 
-                따로 augmentation 주는 step 한번 따로 해줘야 하는건가..? 애매하네
-                '''
-                #images.append(self.test_transform(self.images[i])) 이미 test_transform이 들어가 있음
                 images.append(self.test_transform(self.images[i]))
                 labels.append(self.labels[i])
             candidate_data['image'] = torch.stack(images)
@@ -1633,8 +1627,8 @@ def get_train_datalist(dataset, sigma, repeat, init_cls, rnd_seed):
     return train_list['stream'], train_list['cls_dict'], train_list['cls_addition']
 
 def get_test_datalist(dataset) -> List:
-    print("test name", f"collections/{dataset}/{dataset}_val2.json")
-    return pd.read_json(f"collections/{dataset}/{dataset}_val2.json").to_dict(orient="records")
+    print("test name", f"collections/{dataset}/{dataset}_val.json")
+    return pd.read_json(f"collections/{dataset}/{dataset}_val.json").to_dict(orient="records")
 
 
 def get_statistics(dataset: str):
