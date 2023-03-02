@@ -8,6 +8,7 @@ import random
 import numpy as np
 import torch
 import pickle
+import math
 
 import torch.nn as nn
 import torch.nn.functional as F
@@ -32,7 +33,7 @@ class Ours(CLManagerBase):
         self.target_layer = kwargs["target_layer"]
         self.selected_num = 512
         self.corr_map = {}
-        
+        self.count_decay_ratio = kwargs["count_decay_ratio"]
         super().__init__(
             train_datalist, test_datalist, device, **kwargs
         )
@@ -65,9 +66,6 @@ class Ours(CLManagerBase):
         self._supported_layers = ['Linear', 'Conv2d']
         self.freeze_warmup = 500
         self.grad_dict = {}
-        
-        # Information based freezing
-        self.corr_map = {}
 
         # for gradient subsampling
         
@@ -130,12 +128,11 @@ class Ours(CLManagerBase):
         for name, p in self.model.named_parameters():
             print(name, p.shape)
 
-        
 
     def initialize_future(self):
         self.data_stream = iter(self.train_datalist)
         self.dataloader = MultiProcessLoader(self.n_worker, self.cls_dict, self.train_transform, self.data_dir, self.transform_on_gpu, self.cpu_transform, self.device, self.use_kornia, self.transform_on_worker)
-        self.memory = OurMemory(self.memory_size, self.T)
+        self.memory = OurMemory(self.memory_size, self.T, self.count_decay_ratio)
 
         self.grad_score_per_layer = None
 
@@ -183,7 +180,7 @@ class Ours(CLManagerBase):
             self.memory.add_new_class(sample["klass"])
             self.dataloader.add_new_class(self.memory.cls_dict)
             self.future_add_new_class()
-        self.update_memory(sample)
+        self.update_memory(sample, self.future_sample_num)
         self.future_num_updates += self.online_iter
 
         if  self.future_num_updates >= 1:
@@ -236,6 +233,7 @@ class Ours(CLManagerBase):
                 param.requires_grad = False
 
     def online_step(self, sample, sample_num, n_worker):
+        self.sample_num = sample_num
         if sample['klass'] not in self.exposed_classes:
             self.add_new_class(sample['klass'], sample)
             self.writer.add_scalar(f"train/add_new_class", 1, sample_num)
@@ -274,6 +272,7 @@ class Ours(CLManagerBase):
         # 자기 자신은 1로 initialize
         self.corr_map[len_key] = {}
         self.corr_map[len_key][len_key] = None
+
 
     def add_new_class(self, class_name, sample=None):
         print("!!add_new_class seed", self.rnd_seed)
@@ -366,12 +365,7 @@ class Ours(CLManagerBase):
             self.optimizer.step()
             #self.update_gradstat(self.sample_num, y)
             
-            if self.future_sample_num >= self.corr_warm_up:
-                self.update_correlation(y)
-                # for saving!
-                self.corr_map_list.append(copy.deepcopy(self.corr_map))
-                self.sample_count_list.append(copy.deepcopy(self.memory.usage_count))
-                self.labels_list.append(copy.deepcopy(self.memory.labels))
+            self.update_correlation(y)
 
             if not self.frozen:
                 self.calculate_fisher()
@@ -401,14 +395,26 @@ class Ours(CLManagerBase):
         return total_loss / iterations, correct / num_data
 
     def online_evaluate(self, test_list, sample_num, batch_size, n_worker, cls_dict, cls_addition, data_time):
+        self.corr_map_list.append(copy.deepcopy(self.corr_map))
+        self.sample_count_list.append(copy.deepcopy(self.memory.usage_count))
+        self.labels_list.append(copy.deepcopy(self.memory.labels))
+        
         # store한 애들 저장
-        with open('corr_map_list.pickle', 'wb') as f:
+        corr_map_name = "corr_map_list_T_" + str(self.T) + "_decay_" + str(self.memory.count_decay_ratio) + ".pickle"
+        sample_count_name = "sample_count_list_T_" + str(self.T) + "_decay_" + str(self.memory.count_decay_ratio) + ".pickle"
+        labels_list_name = "labels_list_T_" + str(self.T) + "_decay_" + str(self.memory.count_decay_ratio) + ".pickle"
+        
+        print("corr_map_name", corr_map_name)
+        print("sample_count_name", sample_count_name)
+        print("labels_list_name", labels_list_name)
+        
+        with open(corr_map_name, 'wb') as f:
             pickle.dump(self.corr_map_list, f, pickle.HIGHEST_PROTOCOL)
         
-        with open('sample_count_list.pickle', 'wb') as f:
+        with open(sample_count_name, 'wb') as f:
             pickle.dump(self.sample_count_list, f, pickle.HIGHEST_PROTOCOL)
         
-        with open('labels_list.pickle', 'wb') as f:
+        with open(labels_list_name, 'wb') as f:
             pickle.dump(self.labels_list, f, pickle.HIGHEST_PROTOCOL)
         
         return super().online_evaluate(test_list, sample_num, batch_size, n_worker, cls_dict, cls_addition, data_time)
@@ -439,16 +445,16 @@ class Ours(CLManagerBase):
                 self.total_flops += (len(logit) * 2) / 10e9
         return logit, loss
 
-    def update_memory(self, sample):
+    def update_memory(self, sample, sample_num):
         if len(self.memory.images) >= self.memory_size:
             label_frequency = copy.deepcopy(self.memory.cls_count)
             label_frequency[self.exposed_classes.index(sample['klass'])] += 1
             cls_to_replace = np.argmax(np.array(label_frequency))
             cand_idx = self.memory.cls_idx[cls_to_replace]
             idx_to_replace = random.choice(cand_idx)
-            self.memory.replace_sample(sample, idx_to_replace)
+            self.memory.replace_sample(sample, sample_num, idx_to_replace)
         else:
-            self.memory.replace_sample(sample)
+            self.memory.replace_sample(sample, sample_num)
 
     def update_correlation(self, labels):
         cor_dic = {}
@@ -481,11 +487,10 @@ class Ours(CLManagerBase):
                 stacked_tensor[i] /= norm_tensor[i]
             '''
             centered_list.append(stacked_tensor)
-        
         for i, key_i in enumerate(key_list):
             for j, key_j in enumerate(key_list):
                 if key_i > key_j:
-                    continue
+                    continue           
                 cor_i_j = torch.mean(torch.matmul(centered_list[i], centered_list[j].T)).item()
                 # [i][j] correlation update
                 '''
@@ -493,8 +498,9 @@ class Ours(CLManagerBase):
                 print("self.corr_map[key_i][key_j]")
                 print(self.corr_map[key_i][key_j])
                 '''
-                if self.corr_map[key_i][key_j] == None:
-                    self.corr_map[key_i][key_j] = cor_i_j
+                if self.corr_map[key_i][key_j] is None:
+                    if not math.isnan(cor_i_j):
+                        self.corr_map[key_i][key_j] = cor_i_j
                 else:
                     self.corr_map[key_i][key_j] += self.grad_ema_ratio * (cor_i_j - self.corr_map[key_i][key_j])
         #print("self.corr_map")
@@ -609,13 +615,16 @@ class Ours(CLManagerBase):
 
 
 class OurMemory(MemoryBase):
-    def __init__(self, memory_size, T):
+    def __init__(self, memory_size, T, count_decay_ratio):
         super().__init__(memory_size)
         self.T = T
+        self.entered_time = []
+        self.count_decay_ratio = count_decay_ratio
 
-    def replace_sample(self, sample, idx=None):
+    def replace_sample(self, sample, sample_num, idx=None):
         super().replace_sample(sample, idx)
-        self.usage_count.append(0)
+        self.usage_count = np.append(self.usage_count, 0)
+        self.entered_time.append(sample_num)
     
     # balanced probability retrieval
     def balanced_retrieval(self, size):
@@ -631,6 +640,9 @@ class OurMemory(MemoryBase):
 
     
     def retrieval(self, size, similarity_matrix=None):
+        # for use count decaying
+        self.usage_count *= self.count_decay_ratio
+            
         if similarity_matrix is None:
             return self.balanced_retrieval(size)
         else:
@@ -644,7 +656,7 @@ class OurMemory(MemoryBase):
             return memory_batch
         
     def get_similarity_weight(self, sim_matrix):
-        weight = torch.Tensor(self.usage_count)
+        weight = np.array(self.usage_count).astype(np.float64)
         #total_count = sum(self.class_usage_cnt)
         
         for my_klass, my_klass_count in enumerate(self.class_usage_count):
@@ -657,12 +669,19 @@ class OurMemory(MemoryBase):
                 max_klass = max(my_klass, other_klass)
                 if sim_matrix[min_klass][max_klass] is None:
                     continue
-                x += (sim_matrix[min_klass][max_klass] * other_class_count)
+                other_klass_index = np.where(other_klass == np.array(self.labels))[0]
+                other_class_decayed_count = np.sum(self.usage_count[other_klass_index])
+                print("other_class_count", other_class_count, "other_class_decayed_count", other_class_decayed_count)
+                x += (sim_matrix[min_klass][max_klass] * other_class_decayed_count)
             weight[klass_index] += x 
 
+        '''
         total_count = sum(weight)
         weight = torch.exp(-(weight/total_count)*self.T).double()
         weight = F.softmax(weight, dim=0)
+        '''
+        weight = np.exp(-(weight)*self.T)
+        weight /= sum(weight)
         return weight
     
     

@@ -578,7 +578,7 @@ class MemoryBase:
         self.cls_list = []
         self.cls_count = []
         self.cls_idx = []
-        self.usage_count = []
+        self.usage_count = np.array([])
         self.class_usage_count = []
         self.current_images = []
         self.current_labels = []

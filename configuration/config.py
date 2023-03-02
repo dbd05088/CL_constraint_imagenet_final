@@ -133,6 +133,7 @@ def base_parser():
     parser.add_argument("--online_iter", type=float, default=1, help="number of model updates per samples seen.")
 
     # Ours
+    parser.add_argument("--count_decay_ratio", type=float, default=0.9)
     parser.add_argument("--temperature", type=float, default=0.5)
     parser.add_argument("--corr_warm_up", type=int, default=50)
     parser.add_argument("--unfreeze_rate", type=float, default=0.25)
