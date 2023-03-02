@@ -7,12 +7,14 @@ import datetime
 import random
 import numpy as np
 import torch
+import pickle
 
 import torch.nn as nn
 import torch.nn.functional as F
 
 from methods.cl_manager import CLManagerBase, MemoryBase
 from utils.data_loader import cutmix_data, MultiProcessLoader
+from utils import autograd_hacks
 logger = logging.getLogger()
 # writer = SummaryWriter("tensorboard")
 
@@ -132,16 +134,15 @@ class Ours(CLManagerBase):
 
     def initialize_future(self):
         self.data_stream = iter(self.train_datalist)
-        self.dataloader = MultiProcessLoader(self.n_worker, self.cls_dict, self.train_transform, self.data_dir, self.transform_on_gpu, self.cpu_transform, self.device, self.use_kornia)
+        self.dataloader = MultiProcessLoader(self.n_worker, self.cls_dict, self.train_transform, self.data_dir, self.transform_on_gpu, self.cpu_transform, self.device, self.use_kornia, self.transform_on_worker)
         self.memory = OurMemory(self.memory_size, self.T)
 
-        self.grad_score_per_layer = None 
-        # Hyunseo: gradient threshold
+        self.grad_score_per_layer = None
+
         if self.target_layer == "whole_conv2":
             self.target_layers = ["group1.blocks.block0.conv2.block.0.weight", "group1.blocks.block1.conv2.block.0.weight", "group2.blocks.block0.conv2.block.0.weight", "group2.blocks.block1.conv2.block.0.weight", "group3.blocks.block0.conv2.block.0.weight", "group3.blocks.block1.conv2.block.0.weight", "group4.blocks.block0.conv2.block.0.weight", "group4.blocks.block1.conv2.block.0.weight"]
         elif self.target_layer == "last_conv2":
             self.target_layers = ["group1.blocks.block1.conv2.block.0.weight", "group2.blocks.block1.conv2.block.0.weight", "group3.blocks.block1.conv2.block.0.weight", "group4.blocks.block1.conv2.block.0.weight"]
-        
 
         autograd_hacks.add_hooks(self.model)
         self.selected_mask = {}
@@ -560,7 +561,8 @@ class Ours(CLManagerBase):
                     block_name = '.'.join(n.split('.')[:-3])
                     get_attr = attrgetter(block_name)
                     group_fisher[layer_num] += (p.grad.clone().detach().clamp(-1000, 1000) ** 2).sum().item()/get_attr(self.model).input_scale
-                    self.total_flops += (len(p.grad.clone().detach().flatten())*2+get_attr(self.model).input_size*2) / 10e9
+                    if self.unfreeze_rate < 1:
+                        self.total_flops += (len(p.grad.clone().detach().flatten())*2+get_attr(self.model).input_size*2) / 10e9
 
         for i in range(self.num_blocks):
             if i not in self.freeze_idx or not self.frozen:
@@ -576,7 +578,8 @@ class Ours(CLManagerBase):
     def get_freeze_idx(self, logit, label):
         grad = self.get_grad(logit, label, self.model.fc.weight)
         last_grad = (grad ** 2 ).sum().item()
-        self.total_flops += len(grad.clone().detach().flatten())/10e9
+        if self.unfreeze_rate < 1:
+            self.total_flops += len(grad.clone().detach().flatten())/10e9
         batch_freeze_score = last_grad/(self.last_grad_mean+1e-10)
         self.last_grad_mean += self.fisher_ema_ratio * (last_grad - self.last_grad_mean)
         freeze_score = []
@@ -599,7 +602,8 @@ class Ours(CLManagerBase):
 
         front = (prob - oh_label).shape
         back = weight.shape
-        self.total_flops += ((front[0] * back[1] * (2 * front[1] - 1)) / 10e9)
+        if self.unfreeze_rate < 1:
+            self.total_flops += ((front[0] * back[1] * (2 * front[1] - 1)) / 10e9)
 
         return torch.matmul((prob - oh_label), weight)
 

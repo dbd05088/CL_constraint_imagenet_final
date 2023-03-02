@@ -65,7 +65,7 @@ def load_data(sample, data_dir, transform=None):
     return image
 
 @torch.no_grad()
-def worker_loop(index_queue, data_queue, data_dir, transform, transform_on_gpu=False, cpu_transform=None, device='cpu', use_kornia=False):
+def worker_loop(index_queue, data_queue, data_dir, transform, transform_on_gpu=False, cpu_transform=None, device='cpu', use_kornia=False, transform_on_worker=True):
     watchdog = ManagerWatchdog()
     if use_kornia:
         if 'cifar100' in data_dir:
@@ -98,14 +98,15 @@ def worker_loop(index_queue, data_queue, data_dir, transform, transform_on_gpu=F
                 else:
                     images.append(load_data(sample, data_dir, transform))
                 labels.append(sample["label"])
-            if use_kornia:
-                images = kornia_randaug(torch.stack(images).to(device))
-            elif transform_on_gpu:
-                images = transform(torch.stack(images).to(device))
+            if transform_on_worker:
+                if use_kornia:
+                    images = kornia_randaug(torch.stack(images).to(device))
+                elif transform_on_gpu:
+                    images = transform(torch.stack(images).to(device))
             else:
-                images = torch.stack(images).to(device)
+                images = torch.stack(images)
             data['image'] = images
-            data['label'] = torch.LongTensor(labels).to(device)
+            data['label'] = torch.LongTensor(labels)
             data_queue.put(data)
         else:
             data_queue.put(None)
