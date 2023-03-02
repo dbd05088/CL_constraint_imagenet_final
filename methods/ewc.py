@@ -29,11 +29,11 @@ class EWCpp(ER):
         super().__init__(
             criterion, device, train_transform, test_transform, n_classes, **kwargs
         )
-
         # except for last layers.
-        self.params = {
+        self.parameters = {
             n: p for n, p in list(self.model.named_parameters())[:-2] if p.requires_grad
-        }  # For convenience
+        }
+        # For convenience
         self.regularization_terms = {}
         self.task_count = 0
         self.reg_coef = kwargs["reg_coef"]
@@ -46,7 +46,7 @@ class EWCpp(ER):
         self.alpha = 0.5
         self.epoch_score = {}
         self.epoch_fisher = {}
-        for n, p in self.params.items():
+        for n, p in self.parameters.items():
             self.epoch_score[n] = (
                 p.clone().detach().fill_(0).to(self.device)
             )  # zero initialized
@@ -65,12 +65,15 @@ class EWCpp(ER):
                 importance = reg_term["importance"]
                 task_param = reg_term["task_param"]
 
-                for n, p in self.params.items():
+                for n, p in self.parameters.items():
+                    print("importance[n]", importance[n].shape)
+                    print("p", p.shape)
+                    print("task_param[n]", task_param[n].shape)
                     task_reg_loss += (importance[n] * (p - task_param[n]) ** 2).sum()
 
                 max_importance = 0
                 max_param_change = 0
-                for n, p in self.params.items():
+                for n, p in self.parameters.items():
                     max_importance = max(max_importance, importance[n].max())
                     max_param_change = max(
                         max_param_change, ((p - task_param[n]) ** 2).max()
@@ -87,15 +90,21 @@ class EWCpp(ER):
     def online_train(self, sample, batch_size, n_worker, iterations=1, stream_batch_size=1):
         self.model.train()
         total_loss, correct, num_data = 0.0, 0.0, 0.0
+        if len(sample) > 0:
+            self.memory.register_stream(sample)
+        '''
         if stream_batch_size > 0:
             sample_dataset = StreamDataset(sample, dataset=self.dataset, transform=self.train_transform,
                                            cls_list=self.exposed_classes, data_dir=self.data_dir, device=self.device,
                                            transform_on_gpu=self.gpu_transform)
+        '''
+        
         if len(self.memory) > 0 and batch_size - stream_batch_size > 0:
             memory_batch_size = min(len(self.memory), batch_size - stream_batch_size)
 
         for i in range(iterations):
             self.model.train()
+            '''
             x = []
             y = []
             if stream_batch_size > 0:
@@ -111,15 +120,23 @@ class EWCpp(ER):
 
             x = x.to(self.device)
             y = y.to(self.device)
+            '''
+            
+            data = self.memory.get_batch(batch_size, stream_batch_size)
+            x = data["image"].to(self.device)
+            y = data["label"].to(self.device)
+            x = x.to(self.device)
+            y = y.to(self.device)
 
             self.optimizer.zero_grad()
-
-            old_params = {n: p.clone().detach() for n, p in self.params.items()}
-            old_grads = {n: p.grad.clone().detach() for n, p in self.params.items() if p.grad is not None}
+            old_params = {n: p.clone().detach() for n, p in self.parameters.items()}
+            old_grads = {n: p.grad.clone().detach() for n, p in self.parameters.items() if p.grad is not None}
 
             logit, loss = self.model_forward(x, y)
+            self.total_flops += (len(x) * (self.forward_flops + self.backward_flops))
+            
             _, preds = logit.topk(self.topk, 1, True, True)
-
+            
             if self.use_amp:
                 with torch.cuda.amp.autocast():
                     reg_loss = self.regularization_loss()
@@ -135,9 +152,9 @@ class EWCpp(ER):
                 loss.backward()
                 self.optimizer.step()
             self.update_schedule()
-            new_params = {n: p.clone().detach() for n, p in self.params.items()}
+            new_params = {n: p.clone().detach() for n, p in self.parameters.items()}
             new_grads = {
-                n: p.grad.clone().detach() for n, p in self.params.items() if p.grad is not None
+                n: p.grad.clone().detach() for n, p in self.parameters.items() if p.grad is not None
             }
             self.update_fisher_and_score(new_params, old_params, new_grads, old_grads)
             _, preds = logit.topk(self.topk, 1, True, True)
@@ -150,7 +167,7 @@ class EWCpp(ER):
     def online_after_task(self, cur_iter):
         # 2.Backup the weight of current task
         task_param = {}
-        for n, p in self.params.items():
+        for n, p in self.parameters.items():
             task_param[n] = p.clone().detach()
 
         # 3.Calculate the importance of weights for current task
@@ -175,7 +192,7 @@ class EWCpp(ER):
         logger.debug(f"# of reg_terms: {len(self.regularization_terms)}")
 
     def update_fisher_and_score(self, new_params, old_params, new_grads, old_grads, epsilon=0.001):
-        for n, _ in self.params.items():
+        for n, _ in self.parameters.items():
             if n in old_grads:
                 new_p = new_params[n]
                 old_p = old_params[n]
@@ -209,11 +226,11 @@ class EWCpp(ER):
             self.score.append(self.epoch_score)
         else:
             score = {}
-            for n, p in self.params.items():
+            for n, p in self.parameters.items():
                 score[n] = 0.5 * self.score[-1][n] + 0.5 * self.epoch_score[n]
             self.score.append(score)
 
-        for n, p in self.params.items():
+        for n, p in self.parameters.items():
             importance[n] = self.fisher[-1][n]
-            self.epoch_score[n] = self.params[n].clone().detach().fill_(0)
+            self.epoch_score[n] = self.parameters[n].clone().detach().fill_(0)
         return importance

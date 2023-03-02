@@ -237,6 +237,7 @@ class ER:
 
         
     def online_step(self, sample, sample_num, n_worker):
+        self.temp_batchsize = self.batch_size
         if sample['klass'] not in self.exposed_classes:
             self.add_new_class(sample['klass'])
 
@@ -246,7 +247,7 @@ class ER:
         if len(self.temp_batch) == self.temp_batchsize:
             iteration = int(self.num_updates)
             if iteration != 0:
-                train_loss, train_acc = self.online_train(self.temp_batch, self.batch_size, n_worker,
+                train_loss, train_acc = self.online_train(self.temp_batch, self.batch_size, n_worker, sample_num,
                                                       iterations=int(self.num_updates), stream_batch_size=self.temp_batchsize)
                 self.report_training(sample_num, train_loss, train_acc)
                 
@@ -254,6 +255,7 @@ class ER:
                     self.update_memory(stored_sample)
 
                 self.temp_batch = []
+                self.num_updates -= int(self.num_updates)
 
 
     def save_std_pickle(self):
