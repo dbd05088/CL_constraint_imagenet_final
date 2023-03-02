@@ -134,7 +134,8 @@ def base_parser():
 
     # Ours
     parser.add_argument("--count_decay_ratio", type=float, default=0.9)
-    parser.add_argument("--temperature", type=float, default=0.5)
+    parser.add_argument("--temperature", type=float, default=2)
+    parser.add_argument("--k_coeff", type=float, default=2)
     parser.add_argument("--corr_warm_up", type=int, default=50)
     parser.add_argument("--unfreeze_rate", type=float, default=0.25)
     parser.add_argument("--freeze_warmup", type=int, default=100)

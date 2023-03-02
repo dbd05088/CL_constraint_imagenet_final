@@ -26,7 +26,6 @@ FREEZE_WARMUP=1000
 MAX_P="1.0"
 MIN_P="0.1"
 TARGET_LAYER="last_conv2" # whole_conv2, last_conv2
-TEMPERATURE=0.5
 COUNT_DECAY_RATIO=0.9
 CORR_WARM_UP=50
 TRANSFORM_ON_GPU="--transform_on_gpu"
@@ -34,6 +33,8 @@ N_WORKER=4
 FUTURE_STEPS=2
 EVAL_N_WORKER=4
 EVAL_BATCH_SIZE=512
+K_COEFF=2
+TEMPERATURE=2
 
 
 if [ "$DATASET" == "cifar10" ]; then
@@ -75,8 +76,8 @@ do
     --dataset $DATASET --use_weight $USE_WEIGHT --klass_train_warmup $KLASS_TRAIN_WARMUP --freeze_warmup $FREEZE_WARMUP\
     --sigma $SIGMA --repeat $REPEAT --init_cls $INIT_CLS --weight_method $WEIGHT_METHOD --target_layer $TARGET_LAYER \
     --rnd_seed $RND_SEED --weight_option $WEIGHT_OPTION --klass_warmup $KLASS_WARMUP --temperature $TEMPERATURE \
-    --model_name $MODEL_NAME --opt_name $OPT_NAME --sched_name $SCHED_NAME --version $VERSION \
-    --lr $LR --batchsize $BATCHSIZE --recent_ratio $RECENT_RATIO --avg_prob $AVG_PROB --corr_warm_up $CORR_WARM_UP \
+    --model_name $MODEL_NAME --opt_name $OPT_NAME --sched_name $SCHED_NAME --version $VERSION --transform_on_worker \
+    --lr $LR --batchsize $BATCHSIZE --recent_ratio $RECENT_RATIO --avg_prob $AVG_PROB --corr_warm_up $CORR_WARM_UP --k_coeff $K_COEFF \
     --memory_size $MEM_SIZE --online_iter $ONLINE_ITER --curriculum_option $CURRICULUM_OPTION --count_decay_ratio $COUNT_DECAY_RATIO \
     --note $NOTE --eval_period $EVAL_PERIOD --imp_update_period $IMP_UPDATE_PERIOD $USE_AMP --n_worker $N_WORKER \
     --future_steps $FUTURE_STEPS --eval_n_worker $EVAL_N_WORKER --eval_batch_size $EVAL_BATCH_SIZE &

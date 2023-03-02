@@ -34,6 +34,8 @@ class Ours(CLManagerBase):
         self.selected_num = 512
         self.corr_map = {}
         self.count_decay_ratio = kwargs["count_decay_ratio"]
+        self.k_coeff = kwargs["k_coeff"]
+        
         super().__init__(
             train_datalist, test_datalist, device, **kwargs
         )
@@ -132,7 +134,7 @@ class Ours(CLManagerBase):
     def initialize_future(self):
         self.data_stream = iter(self.train_datalist)
         self.dataloader = MultiProcessLoader(self.n_worker, self.cls_dict, self.train_transform, self.data_dir, self.transform_on_gpu, self.cpu_transform, self.device, self.use_kornia, self.transform_on_worker)
-        self.memory = OurMemory(self.memory_size, self.T, self.count_decay_ratio)
+        self.memory = OurMemory(self.memory_size, self.T, self.count_decay_ratio, self.k_coeff)
 
         self.grad_score_per_layer = None
 
@@ -615,9 +617,10 @@ class Ours(CLManagerBase):
 
 
 class OurMemory(MemoryBase):
-    def __init__(self, memory_size, T, count_decay_ratio):
+    def __init__(self, memory_size, T, count_decay_ratio, k_coeff):
         super().__init__(memory_size)
         self.T = T
+        self.k_coeff = k_coeff
         self.entered_time = []
         self.count_decay_ratio = count_decay_ratio
 
@@ -641,8 +644,10 @@ class OurMemory(MemoryBase):
     
     def retrieval(self, size, similarity_matrix=None):
         # for use count decaying
-        self.usage_count *= self.count_decay_ratio
-            
+        if len(self.images) > size:
+            self.count_decay_ratio = size / (len(self.images)*self.k_coeff)  #(self.k_coeff / (len(self.images)*self.count_decay_ratio))
+        self.usage_count *= (1-self.count_decay_ratio)
+        
         if similarity_matrix is None:
             return self.balanced_retrieval(size)
         else:
@@ -680,7 +685,7 @@ class OurMemory(MemoryBase):
         weight = torch.exp(-(weight/total_count)*self.T).double()
         weight = F.softmax(weight, dim=0)
         '''
-        weight = np.exp(-(weight)*self.T)
+        weight = np.exp(-(weight)/self.T)
         weight /= sum(weight)
         return weight
     
