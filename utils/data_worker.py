@@ -103,6 +103,8 @@ def worker_loop(index_queue, data_queue, data_dir, transform, transform_on_gpu=F
                     images = kornia_randaug(torch.stack(images).to(device))
                 elif transform_on_gpu:
                     images = transform(torch.stack(images).to(device))
+                else:
+                    images = torch.stack(images)
             else:
                 images = torch.stack(images)
             data['image'] = images
