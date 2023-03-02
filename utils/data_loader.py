@@ -34,16 +34,6 @@ class MultiProcessLoader():
         self.transform_on_gpu = transform_on_gpu
         self.transform_on_worker = transform_on_worker
         self.use_kornia = use_kornia
-        if self.use_kornia:
-            if 'cifar100' in data_dir:
-                mean, std, n_classes, inp_size, _ = get_statistics(dataset='cifar100')
-            elif 'cifar10' in data_dir:
-                mean, std, n_classes, inp_size, _ = get_statistics(dataset='cifar10')
-            elif 'tinyimagenet' in data_dir:
-                mean, std, n_classes, inp_size, _ = get_statistics(dataset='tinyimagenet')
-            elif 'imagenet' in data_dir:
-                mean, std, n_classes, inp_size, _ = get_statistics(dataset='imagenet')
-            self.transform = DataAugmentation(inp_size, mean, std)
         self.cpu_transform = cpu_transform
         self.device = device
         self.result_queues = []
@@ -60,6 +50,16 @@ class MultiProcessLoader():
             self.workers.append(w)
             self.index_queues.append(index_queue)
             self.result_queues.append(result_queue)
+        if self.use_kornia:
+            if 'cifar100' in data_dir:
+                mean, std, n_classes, inp_size, _ = get_statistics(dataset='cifar100')
+            elif 'cifar10' in data_dir:
+                mean, std, n_classes, inp_size, _ = get_statistics(dataset='cifar10')
+            elif 'tinyimagenet' in data_dir:
+                mean, std, n_classes, inp_size, _ = get_statistics(dataset='tinyimagenet')
+            elif 'imagenet' in data_dir:
+                mean, std, n_classes, inp_size, _ = get_statistics(dataset='imagenet')
+            self.transform = DataAugmentation(inp_size, mean, std)
 
     def add_new_class(self, cls_dict):
         self.cls_dict = cls_dict
