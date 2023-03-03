@@ -4,6 +4,9 @@
 NOTE="test" # Short description of the experiment. (WARNING: logs/results with the same note will be overwritten!)
 MODE="ours"
 
+K_COEFF="2"
+TEMPERATURE="2"
+
 TRANSFORM_ON_GPU="--transform_on_gpu"
 N_WORKER=4
 FUTURE_STEPS=2
@@ -11,10 +14,8 @@ EVAL_N_WORKER=4
 EVAL_BATCH_SIZE=1000
 USE_KORNIA="--use_kornia"
 #USE_KORNIA=""
-UNFREEZE_RATE=0.05
+UNFREEZE_RATE=0.25
 SEEDS="1"
-K_COEFF="2"
-TEMPERATURE="2"
 
 
 DATASET="cifar10" # cifar10, cifar100, tinyimagenet, imagenet
