@@ -348,7 +348,8 @@ class Ours(CLManagerBase):
             data = self.get_batch()
             x = data["image"].to(self.device)
             y = data["label"].to(self.device)
-
+            print("y")
+            print(y)
             #self.before_model_update()
             self.optimizer.zero_grad()
 
@@ -461,7 +462,7 @@ class Ours(CLManagerBase):
     def update_correlation(self, labels):
         cor_dic = {}
         for n, p in self.model.named_parameters():
-            if p.requires_grad is True and p.grad is not None and n in self.target_layers:
+            if p.requires_grad is True and p.grad is not None and n in self.target_layers[-1]:
                 if not p.grad.isnan().any():
                     for i, y in enumerate(labels):
                         sub_sampled = p.grad1[i].clone().detach().clamp(-1000, 1000).flatten()[self.selected_mask[n]]
@@ -646,7 +647,10 @@ class OurMemory(MemoryBase):
         # for use count decaying
         if len(self.images) > size:
             self.count_decay_ratio = size / (len(self.images)*self.k_coeff)  #(self.k_coeff / (len(self.images)*self.count_decay_ratio))
-        self.usage_count *= (1-self.count_decay_ratio)
+            print("count_decay_ratio", self.count_decay_ratio)
+            self.usage_count *= (1-self.count_decay_ratio)
+            print("self.usave_count")
+            print(self.usage_count)
         
         if similarity_matrix is None:
             return self.balanced_retrieval(size)
