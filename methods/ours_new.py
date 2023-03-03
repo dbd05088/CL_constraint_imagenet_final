@@ -715,15 +715,13 @@ class OurMemory(MemoryBase):
             return memory_batch
         
     def get_similarity_weight(self, sim_dict):
-        weight = np.array(self.usage_count).astype(np.float64)
-        #total_count = sum(self.class_usage_cnt)
         n_cls = len(self.cls_list)
         cls_cnt_sum = torch.zeros(n_cls)
         for i, cnt in enumerate(self.usage_count):
             cls_cnt_sum[self.labels[i]] += cnt
-        # print('\n\n\n\n')
-        # print("cls_cnt_sum:", cls_cnt_sum.numpy().round(6))
-        # print("cls_cnt_avg:", (cls_cnt_sum/torch.Tensor([len(self.cls_idx[i]) for i in range(n_cls)])).numpy().round(5))
+        print('\n\n')
+        print("cls_cnt_sum:", cls_cnt_sum.numpy().round(4))
+        print("cls_cnt_avg:", (cls_cnt_sum/torch.Tensor([len(self.cls_idx[i]) for i in range(n_cls)])).numpy().round(4))
 
         sim_matrix = torch.zeros((n_cls, n_cls))
         self_score = torch.ones(n_cls)
@@ -733,43 +731,28 @@ class OurMemory(MemoryBase):
                 sim_matrix[j][i] = sim_dict[i][j]
                 if i == j:
                     self_score -= sim_dict[i][i]
-        # print("sim_matrix:\n", sim_matrix.numpy().round(5))
+        print("sim_matrix:\n", sim_matrix.numpy().round(4))
 
         cls_score_sum = (sim_matrix * cls_cnt_sum).sum(dim=1)
-        # print("cls_score_sum:", cls_score_sum.numpy().round(5))
+        print("cls_score_sum:", cls_score_sum.numpy().round(4))
 
         sample_score = cls_score_sum[torch.LongTensor(self.labels)] + torch.Tensor(self.usage_count)*self_score[torch.LongTensor(self.labels)]
 
         sample_score /= len(self.images)
-        # print("sample_score mean, std:", sample_score.mean().item(), sample_score.std().item())
-        # cls_score_sum = torch.zeros(n_cls)
-        # for i in range(len(self.images)):
-        #     cls_score_sum[self.labels[i]] += sample_score[i]
-        # print("cls_score sum, mean:", cls_score_sum.numpy().round(5), (cls_score_sum/torch.Tensor(self.cls_count)).numpy().round(5))
+        print("sample_score mean, std:", sample_score.mean().item(), sample_score.std().item())
+        cls_score_sum = torch.zeros(n_cls)
+        for i in range(len(self.images)):
+            cls_score_sum[self.labels[i]] += sample_score[i]
+        print("cls_score sum, mean:", cls_score_sum.numpy().round(4), (cls_score_sum/torch.Tensor(self.cls_count)).numpy().round(4))
 
         prob = F.softmax(torch.Tensor(-sample_score/self.T), dim=0)
 
-        # cls_prob_sum = torch.zeros(n_cls)
-        # for i in range(len(self.images)):
-        #     cls_prob_sum[self.labels[i]] += prob[i]
-        # print("prob sum, mean:", cls_prob_sum.numpy().round(5), (cls_prob_sum / torch.Tensor(self.cls_count)).numpy().round(5))
-        # print('\n\n\n\n')
+        cls_prob_sum = torch.zeros(n_cls)
+        for i in range(len(self.images)):
+            cls_prob_sum[self.labels[i]] += prob[i]
+        print("prob sum, mean:", cls_prob_sum.numpy().round(4), (cls_prob_sum / torch.Tensor(self.cls_count)).numpy().round(4))
+        print('\n\n')
 
-        # for my_klass, my_klass_count in enumerate(self.class_usage_count):
-        #     klass_index = np.where(my_klass == np.array(self.labels))[0]
-        #     x = 0
-        #     for other_klass, other_class_count in enumerate(self.class_usage_count):
-        #         min_klass = min(my_klass, other_klass)
-        #         max_klass = max(my_klass, other_klass)
-        #         if sim_matrix[min_klass][max_klass] is None:
-        #             continue
-        #         other_klass_index = np.where(other_klass == np.array(self.labels))[0]
-        #         other_class_decayed_count = np.sum(self.usage_count[other_klass_index])
-        #         # print("other_class_count", other_class_count, "other_class_decayed_count", other_class_decayed_count)
-        #         x += (sim_matrix[min_klass][max_klass] * other_class_decayed_count)
-        #     weight[klass_index] += x
-        #
-        # weight = F.softmax(torch.Tensor(-weight/self.T), dim=0)
         return prob.numpy()
     
     
