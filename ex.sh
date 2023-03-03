@@ -19,7 +19,7 @@ SEEDS="1"
 
 
 DATASET="cifar10" # cifar10, cifar100, tinyimagenet, imagenet
-ONLINE_ITER=0.25
+ONLINE_ITER=0.6
 
 SIGMA=10
 REPEAT=1
