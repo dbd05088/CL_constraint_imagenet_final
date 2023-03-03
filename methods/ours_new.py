@@ -146,11 +146,14 @@ class Ours(CLManagerBase):
         autograd_hacks.add_hooks(self.model)
         self.selected_mask = {}
         self.grad_mavg_base = {n: torch.zeros_like(p) for n, p in list(self.model.named_parameters())[:-2] if p.requires_grad and n in self.target_layers}
+        self.param_count = {n: int((p.numel()) * 0.0005) for n, p in list(self.model.named_parameters())[:-2] if p.requires_grad and n in self.target_layers}
+        #print("self.param_count")
+        #print(self.param_count)
         for key in self.grad_mavg_base.keys():
             a = self.grad_mavg_base[key].flatten()
-            selected_indices = torch.randperm(len(a))[:self.selected_num]
+            #selected_indices = torch.randperm(len(a))[:self.selected_num]
+            selected_indices = torch.randperm(len(a))[:self.param_count[key]]
             self.selected_mask[key] = selected_indices
-            
         self.memory_list = []
         self.temp_batch = []
         self.temp_future_batch = []
@@ -368,7 +371,8 @@ class Ours(CLManagerBase):
             self.optimizer.step()
             #self.update_gradstat(self.sample_num, y)
             
-            self.update_correlation(y)
+            if self.sample_num >= 2:
+                self.update_correlation(y)
 
             if not self.frozen:
                 self.calculate_fisher()
@@ -458,7 +462,62 @@ class Ours(CLManagerBase):
             self.memory.replace_sample(sample, sample_num, idx_to_replace)
         else:
             self.memory.replace_sample(sample, sample_num)
+    
+    def update_correlation(self, labels):
+        
+        current_corr_map = copy.deepcopy(self.corr_map)
+        curr_corr_key_list = list(current_corr_map.keys())
+        for key_i in curr_corr_key_list:
+            for key_j in curr_corr_key_list:
+                current_corr_map[key_i][key_j] = []
+                
+        for layer in list(self.selected_mask.keys()):
+            cor_dic = {}
+            for n, p in self.model.named_parameters():
+                if p.requires_grad is True and p.grad is not None and n==layer:
+                    if not p.grad.isnan().any():
+                        for i, y in enumerate(labels):
+                            sub_sampled = p.grad1[i].clone().detach().clamp(-1000, 1000).flatten()[self.selected_mask[n]]
+                            if y.item() not in cor_dic.keys():
+                                cor_dic[y.item()] = [sub_sampled]
+                            else:
+                                cor_dic[y.item()].append(sub_sampled)
+            centered_list = []
+            key_list = list(cor_dic.keys())
 
+            for key in key_list:
+                #print("key", key, "len", len(cor_dic[key]))
+                stacked_tensor = torch.stack(cor_dic[key])
+                #print("stacked_tensor", stacked_tensor.shape)
+                #stacked_tensor -= torch.mean(stacked_tensor, dim=0) # make zero mean
+                norm_tensor = torch.norm(stacked_tensor, p=2, dim=1) # make unit vector
+                
+                for i in range(len(norm_tensor)):
+                    stacked_tensor[i] /= norm_tensor[i]
+                
+                centered_list.append(stacked_tensor)
+                
+            for i, key_i in enumerate(key_list):
+                for j, key_j in enumerate(key_list):
+                    if key_i > key_j:
+                        continue           
+                    cor_i_j = torch.mean(torch.matmul(centered_list[i], centered_list[j].T)).item()
+                    if not math.isnan(cor_i_j):
+                        current_corr_map[key_i][key_j].append(cor_i_j)
+                        
+        for i, key_i in enumerate(curr_corr_key_list):
+            for j, key_j in enumerate(curr_corr_key_list):
+                if key_i > key_j:
+                    continue
+                if self.corr_map[key_i][key_j] is None:
+                    if len(current_corr_map[key_i][key_j]) != 0:
+                        if not math.isnan(current_corr_map[key_i][key_j][0]):
+                            self.corr_map[key_i][key_j] = np.mean(current_corr_map[key_i][key_j])
+                else:
+                    if len(current_corr_map[key_i][key_j]) != 0:
+                        if not math.isnan(current_corr_map[key_i][key_j][0]):
+                            self.corr_map[key_i][key_j] += self.grad_ema_ratio * (np.mean(current_corr_map[key_i][key_j]) - self.corr_map[key_i][key_j])
+    '''
     def update_correlation(self, labels):
         cor_dic = {}
         for n, p in self.model.named_parameters():
@@ -483,32 +542,19 @@ class Ours(CLManagerBase):
             
             for i in range(len(norm_tensor)):
                 stacked_tensor[i] /= norm_tensor[i]
-                
-            #stacked_tensor.div(norm_tensor.expand_as(stacked_tensor))
-            '''
-            for i in range(len(norm_tensor)):
-                stacked_tensor[i] /= norm_tensor[i]
-            '''
+               
             centered_list.append(stacked_tensor)
         for i, key_i in enumerate(key_list):
             for j, key_j in enumerate(key_list):
                 if key_i > key_j:
                     continue           
                 cor_i_j = torch.mean(torch.matmul(centered_list[i], centered_list[j].T)).item()
-                # [i][j] correlation update
-                '''
-                print("key_i", key_i, "key_j", key_j, "cor_i_j", cor_i_j)
-                print("self.corr_map[key_i][key_j]")
-                print(self.corr_map[key_i][key_j])
-                '''
                 if self.corr_map[key_i][key_j] is None:
                     if not math.isnan(cor_i_j):
                         self.corr_map[key_i][key_j] = cor_i_j
                 else:
                     self.corr_map[key_i][key_j] += self.grad_ema_ratio * (cor_i_j - self.corr_map[key_i][key_j])
-        #print("self.corr_map")
-        #print(self.corr_map)
-
+    '''
 
     def update_gradstat(self, sample_num, labels):
         for n, p in self.model.named_parameters():
@@ -634,7 +680,7 @@ class OurMemory(MemoryBase):
     def balanced_retrieval(self, size):
         sample_size = min(size, len(self.images))
         memory_batch = []
-        cls_idx = np.random.choice(len(self.cls_list), sample_size, replace=False)
+        cls_idx = np.random.choice(len(self.cls_list), sample_size)
         for cls in cls_idx:
             i = np.random.choice(self.cls_idx[cls], 1)[0]
             memory_batch.append(self.images[i])
@@ -649,8 +695,6 @@ class OurMemory(MemoryBase):
             self.count_decay_ratio = size / (len(self.images)*self.k_coeff)  #(self.k_coeff / (len(self.images)*self.count_decay_ratio))
             print("count_decay_ratio", self.count_decay_ratio)
             self.usage_count *= (1-self.count_decay_ratio)
-            print("self.usave_count")
-            print(self.usage_count)
         
         if similarity_matrix is None:
             return self.balanced_retrieval(size)
