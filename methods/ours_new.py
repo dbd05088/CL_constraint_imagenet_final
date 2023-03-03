@@ -634,7 +634,7 @@ class OurMemory(MemoryBase):
     def balanced_retrieval(self, size):
         sample_size = min(size, len(self.images))
         memory_batch = []
-        cls_idx = np.random.choice(len(self.cls_list), sample_size)
+        cls_idx = np.random.choice(len(self.cls_list), sample_size, replace=False)
         for cls in cls_idx:
             i = np.random.choice(self.cls_idx[cls], 1)[0]
             memory_batch.append(self.images[i])
@@ -657,7 +657,7 @@ class OurMemory(MemoryBase):
         else:
             sample_size = min(size, len(self.images))
             weight = self.get_similarity_weight(similarity_matrix)
-            sample_idx = np.random.choice(len(self.images), sample_size, p = weight)
+            sample_idx = np.random.choice(len(self.images), sample_size, p = weight, replace=False)
             memory_batch = list(np.array(self.images)[sample_idx])
             for i in sample_idx:
                 self.usage_count[i]+=1
