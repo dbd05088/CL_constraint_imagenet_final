@@ -113,7 +113,6 @@ class Ours(CLManagerBase):
         self.cumulative_fisher = []
         self.frozen = False
 
-
         self.cumulative_fisher = []
 
         self.klass_train_warmup = kwargs["klass_train_warmup"]
@@ -127,8 +126,8 @@ class Ours(CLManagerBase):
         if self.use_amp:
             self.scaler = torch.cuda.amp.GradScaler()
 
-        for name, p in self.model.named_parameters():
-            print(name, p.shape)
+        # for name, p in self.model.named_parameters():
+        #     print(name, p.shape)
 
 
     def initialize_future(self):
@@ -232,7 +231,7 @@ class Ours(CLManagerBase):
         elif self.target_layer == "whole_conv2":
             group_name = "group" + str(layer_index) + ".blocks.block"+str(block_index)
 
-        print("freeze", group_name)
+        # print("freeze", group_name)
         for name, param in self.model.named_parameters():
             if group_name in name:
                 param.requires_grad = False
@@ -243,8 +242,8 @@ class Ours(CLManagerBase):
             self.add_new_class(sample['klass'], sample)
             self.writer.add_scalar(f"train/add_new_class", 1, sample_num)
             self.add_new_class_time.append(sample_num)
-            print("seed", self.rnd_seed, "dd_new_class_time")
-            print(self.add_new_class_time)
+            # print("seed", self.rnd_seed, "dd_new_class_time")
+            # print(self.add_new_class_time)
         else:
             self.writer.add_scalar(f"train/add_new_class", 0, sample_num)
         
@@ -267,20 +266,27 @@ class Ours(CLManagerBase):
                     total_corr += self.corr_map[i][j]
                     total_corr_count += 1
             self.initial_corr = total_corr / total_corr_count
+            self_corr = 0.0
+            for i in range(len_key):
+                self_corr += self.corr_map[i][i]
+            self_corr_avg = total_corr / total_corr_count
         else:
             self.initial_corr = None
         
         for i in range(len_key):
             # 모든 class의 avg_corr로 initialize
             self.corr_map[i][len_key] = self.initial_corr
-            
+
         # 자기 자신은 1로 initialize
         self.corr_map[len_key] = {}
-        self.corr_map[len_key][len_key] = None
+        if len_key > 1:
+            self.corr_map[len_key][len_key] = self_corr_avg
+        else:
+            self.corr_map[len_key][len_key] = None
 
 
     def add_new_class(self, class_name, sample=None):
-        print("!!add_new_class seed", self.rnd_seed)
+        # print("!!add_new_class seed", self.rnd_seed)
         self.cls_dict[class_name] = len(self.exposed_classes)
         
         # self.grad_cls_score_mavg[len(self.exposed_classes)] = copy.deepcopy(self.grad_cls_score_mavg_base)
@@ -351,8 +357,8 @@ class Ours(CLManagerBase):
             data = self.get_batch()
             x = data["image"].to(self.device)
             y = data["label"].to(self.device)
-            print("y")
-            print(y)
+            # print("y")
+            # print(y)
             #self.before_model_update()
             self.optimizer.zero_grad()
 
@@ -396,8 +402,8 @@ class Ours(CLManagerBase):
             self.freeze_idx = []
             self.after_model_update()
 
-        print("self.corr_map")
-        print(self.corr_map)
+        # print("self.corr_map")
+        # print(self.corr_map)
 
         return total_loss / iterations, correct / num_data
 
@@ -411,9 +417,9 @@ class Ours(CLManagerBase):
         sample_count_name = "sample_count_list_T_" + str(self.T) + "_decay_" + str(self.k_coeff) + ".pickle"
         labels_list_name = "labels_list_T_" + str(self.T) + "_decay_" + str(self.k_coeff) + ".pickle"
         
-        print("corr_map_name", corr_map_name)
-        print("sample_count_name", sample_count_name)
-        print("labels_list_name", labels_list_name)
+        # print("corr_map_name", corr_map_name)
+        # print("sample_count_name", sample_count_name)
+        # print("labels_list_name", labels_list_name)
         
         with open(corr_map_name, 'wb') as f:
             pickle.dump(self.corr_map_list, f, pickle.HIGHEST_PROTOCOL)
@@ -595,7 +601,7 @@ class Ours(CLManagerBase):
             tensor_list.append(torch.mean(torch.stack(self.grad_dict[cls][last_key]), dim=0))
         tensor_list = torch.stack(tensor_list)
         corr_coeff = torch.corrcoef(tensor_list)
-        print(corr_coeff)
+        # print(corr_coeff)
 
     def get_layer_number(self, n):
         name = n.split('.')
@@ -648,7 +654,7 @@ class Ours(CLManagerBase):
         for i in range(9):
             modified_score.append(batch_freeze_score*(self.total_fisher - self.cumulative_fisher[i])/(self.total_fisher + 1e-10) + self.cumulative_backward_flops[i]/self.total_model_flops * max_score)
         optimal_freeze = np.argmax(modified_score)
-        print(modified_score, optimal_freeze)
+        # print(modified_score, optimal_freeze)
         self.freeze_idx = list(range(9))[0:optimal_freeze]
 
     def get_grad(self, logit, label, weight):
@@ -693,7 +699,7 @@ class OurMemory(MemoryBase):
         # for use count decaying
         if len(self.images) > size:
             self.count_decay_ratio = size / (len(self.images)*self.k_coeff)  #(self.k_coeff / (len(self.images)*self.count_decay_ratio))
-            print("count_decay_ratio", self.count_decay_ratio)
+            # print("count_decay_ratio", self.count_decay_ratio)
             self.usage_count *= (1-self.count_decay_ratio)
         
         if similarity_matrix is None:
@@ -701,43 +707,69 @@ class OurMemory(MemoryBase):
         else:
             sample_size = min(size, len(self.images))
             weight = self.get_similarity_weight(similarity_matrix)
-            sample_idx = np.random.choice(len(self.images), sample_size, p = weight, replace=False)
+            sample_idx = np.random.choice(len(self.images), sample_size, p=weight, replace=False)
             memory_batch = list(np.array(self.images)[sample_idx])
             for i in sample_idx:
                 self.usage_count[i]+=1
                 self.class_usage_count[self.labels[i]]+=1    
             return memory_batch
         
-    def get_similarity_weight(self, sim_matrix):
+    def get_similarity_weight(self, sim_dict):
         weight = np.array(self.usage_count).astype(np.float64)
         #total_count = sum(self.class_usage_cnt)
-        
-        for my_klass, my_klass_count in enumerate(self.class_usage_count):
-            klass_index = np.where(my_klass == np.array(self.labels))[0]
-            x = 0
-            for other_klass, other_class_count in enumerate(self.class_usage_count):
-                min_klass = min(my_klass, other_klass)
-                max_klass = max(my_klass, other_klass)
-                if sim_matrix[min_klass][max_klass] is None:
-                    continue
-                other_klass_index = np.where(other_klass == np.array(self.labels))[0]
-                other_class_decayed_count = np.sum(self.usage_count[other_klass_index])
-                print("other_class_count", other_class_count, "other_class_decayed_count", other_class_decayed_count)
-                x += (sim_matrix[min_klass][max_klass] * other_class_decayed_count)
-            weight[klass_index] += x 
+        n_cls = len(self.cls_list)
+        cls_cnt_sum = torch.zeros(n_cls)
+        for i, cnt in enumerate(self.usage_count):
+            cls_cnt_sum[self.labels[i]] += cnt
+        # print('\n\n\n\n')
+        # print("cls_cnt_sum:", cls_cnt_sum.numpy().round(6))
+        # print("cls_cnt_avg:", (cls_cnt_sum/torch.Tensor([len(self.cls_idx[i]) for i in range(n_cls)])).numpy().round(5))
 
-        '''
-        total_count = sum(weight)
-        weight = torch.exp(-(weight/total_count)*self.T).double()
-        weight = F.softmax(weight, dim=0)
-        '''
-        '''
-        weight = np.exp(-(weight)/self.T)
-        weight /= sum(weight)
-        '''
-        weight /= self.T
-        weight *= -1
-        weight = F.softmax(torch.Tensor(weight), dim=0)
-        return weight.tolist()
+        sim_matrix = torch.zeros((n_cls, n_cls))
+        self_score = torch.ones(n_cls)
+        for i in range(n_cls):
+            for j in range(i, n_cls):
+                sim_matrix[i][j] = sim_dict[i][j]
+                sim_matrix[j][i] = sim_dict[i][j]
+                if i == j:
+                    self_score -= sim_dict[i][i]
+        # print("sim_matrix:\n", sim_matrix.numpy().round(5))
+
+        cls_score_sum = (sim_matrix * cls_cnt_sum).sum(dim=1)
+        # print("cls_score_sum:", cls_score_sum.numpy().round(5))
+
+        sample_score = cls_score_sum[torch.LongTensor(self.labels)] + torch.Tensor(self.usage_count)*self_score[torch.LongTensor(self.labels)]
+
+        sample_score /= len(self.images)
+        # print("sample_score mean, std:", sample_score.mean().item(), sample_score.std().item())
+        # cls_score_sum = torch.zeros(n_cls)
+        # for i in range(len(self.images)):
+        #     cls_score_sum[self.labels[i]] += sample_score[i]
+        # print("cls_score sum, mean:", cls_score_sum.numpy().round(5), (cls_score_sum/torch.Tensor(self.cls_count)).numpy().round(5))
+
+        prob = F.softmax(torch.Tensor(-sample_score/self.T), dim=0)
+
+        # cls_prob_sum = torch.zeros(n_cls)
+        # for i in range(len(self.images)):
+        #     cls_prob_sum[self.labels[i]] += prob[i]
+        # print("prob sum, mean:", cls_prob_sum.numpy().round(5), (cls_prob_sum / torch.Tensor(self.cls_count)).numpy().round(5))
+        # print('\n\n\n\n')
+
+        # for my_klass, my_klass_count in enumerate(self.class_usage_count):
+        #     klass_index = np.where(my_klass == np.array(self.labels))[0]
+        #     x = 0
+        #     for other_klass, other_class_count in enumerate(self.class_usage_count):
+        #         min_klass = min(my_klass, other_klass)
+        #         max_klass = max(my_klass, other_klass)
+        #         if sim_matrix[min_klass][max_klass] is None:
+        #             continue
+        #         other_klass_index = np.where(other_klass == np.array(self.labels))[0]
+        #         other_class_decayed_count = np.sum(self.usage_count[other_klass_index])
+        #         # print("other_class_count", other_class_count, "other_class_decayed_count", other_class_decayed_count)
+        #         x += (sim_matrix[min_klass][max_klass] * other_class_decayed_count)
+        #     weight[klass_index] += x
+        #
+        # weight = F.softmax(torch.Tensor(-weight/self.T), dim=0)
+        return prob.numpy()
     
     
