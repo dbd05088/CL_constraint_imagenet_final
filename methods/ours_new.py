@@ -403,9 +403,9 @@ class Ours(CLManagerBase):
         self.labels_list.append(copy.deepcopy(self.memory.labels))
         
         # store한 애들 저장
-        corr_map_name = "corr_map_list_T_" + str(self.T) + "_decay_" + str(self.memory.count_decay_ratio) + ".pickle"
-        sample_count_name = "sample_count_list_T_" + str(self.T) + "_decay_" + str(self.memory.count_decay_ratio) + ".pickle"
-        labels_list_name = "labels_list_T_" + str(self.T) + "_decay_" + str(self.memory.count_decay_ratio) + ".pickle"
+        corr_map_name = "corr_map_list_T_" + str(self.T) + "_decay_" + str(self.k_coeff) + ".pickle"
+        sample_count_name = "sample_count_list_T_" + str(self.T) + "_decay_" + str(self.k_coeff) + ".pickle"
+        labels_list_name = "labels_list_T_" + str(self.T) + "_decay_" + str(self.k_coeff) + ".pickle"
         
         print("corr_map_name", corr_map_name)
         print("sample_count_name", sample_count_name)
@@ -672,8 +672,6 @@ class OurMemory(MemoryBase):
             klass_index = np.where(my_klass == np.array(self.labels))[0]
             x = 0
             for other_klass, other_class_count in enumerate(self.class_usage_count):
-                if my_klass > other_klass:
-                    continue
                 min_klass = min(my_klass, other_klass)
                 max_klass = max(my_klass, other_klass)
                 if sim_matrix[min_klass][max_klass] is None:
