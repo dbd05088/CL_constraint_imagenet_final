@@ -687,8 +687,13 @@ class OurMemory(MemoryBase):
         weight = torch.exp(-(weight/total_count)*self.T).double()
         weight = F.softmax(weight, dim=0)
         '''
+        '''
         weight = np.exp(-(weight)/self.T)
         weight /= sum(weight)
-        return weight
+        '''
+        weight /= self.T
+        weight *= -1
+        weight = F.softmax(torch.Tensor(weight), dim=0)
+        return weight.tolist()
     
     
