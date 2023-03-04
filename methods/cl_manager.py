@@ -579,7 +579,7 @@ class MemoryBase:
         self.cls_count = []
         self.cls_idx = []
         self.usage_count = np.array([])
-        self.class_usage_count = []
+        self.class_usage_count = np.array([])
         self.current_images = []
         self.current_labels = []
         self.current_cls_count = [0 for _ in self.cls_list]
@@ -608,7 +608,7 @@ class MemoryBase:
         self.cls_list.append(class_name)
         self.cls_count.append(0)
         self.cls_idx.append([])
-        self.class_usage_count.append(0)
+        self.class_usage_count = np.append(self.class_usage_count, 0)
 
     def retrieval(self, size):
         sample_size = min(size, len(self.images))
