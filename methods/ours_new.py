@@ -357,8 +357,8 @@ class Ours(CLManagerBase):
             data = self.get_batch()
             x = data["image"].to(self.device)
             y = data["label"].to(self.device)
-            # print("y")
-            # print(y)
+            print("y")
+            print(y)
             #self.before_model_update()
             self.optimizer.zero_grad()
 
