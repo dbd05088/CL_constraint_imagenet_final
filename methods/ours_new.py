@@ -374,12 +374,17 @@ class Ours(CLManagerBase):
                     self.freeze_layers()
 
             _, preds = logit.topk(self.topk, 1, True, True)
-            
-            loss.backward()
-            autograd_hacks.compute_grad1(self.model)
-            
-            self.optimizer.step()
-            #self.update_gradstat(self.sample_num, y)
+
+            if self.use_amp:
+                self.scaler.scale(loss).backward()
+                autograd_hacks.compute_grad1(self.model)
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+            else:
+                loss.backward()
+
+                autograd_hacks.compute_grad1(self.model)
+                self.optimizer.step()
             
             self.update_correlation(y)
 
@@ -471,7 +476,8 @@ class Ours(CLManagerBase):
             self.memory.replace_sample(sample, sample_num, idx_to_replace)
         else:
             self.memory.replace_sample(sample, sample_num)
-    
+
+    @torch.no_grad()
     def update_correlation(self, labels):
         
         current_corr_map = copy.deepcopy(self.corr_map)
@@ -614,7 +620,7 @@ class Ours(CLManagerBase):
             block_num = int(name[2][-1])
             return group_num * 2 + block_num - 1
 
-    # Hyunseo : Information based freeezing
+    @torch.no_grad()
     def calculate_fisher(self):
         group_fisher = [0.0 for _ in range(self.num_blocks)]
         for n, p in list(self.model.named_parameters())[:-2]:
