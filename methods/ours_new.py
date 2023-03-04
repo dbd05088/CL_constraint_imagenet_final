@@ -263,12 +263,16 @@ class Ours(CLManagerBase):
             total_corr_count = 0
             for i in range(len_key):
                 for j in range(i+1, len_key):
-                    total_corr += self.corr_map[i][j]
-                    total_corr_count += 1
+                    if self.corr_map[i][j] is not None:
+                        total_corr += self.corr_map[i][j]
+                        total_corr_count += 1
+            if total_corr_count == 0:
+                total_corr_count = 1
             self.initial_corr = total_corr / total_corr_count
             self_corr = 0.0
             for i in range(len_key):
-                self_corr += self.corr_map[i][i]
+                if self.corr_map[i][j] is not None:
+                    self_corr += self.corr_map[i][i]
             self_corr_avg = total_corr / total_corr_count
         else:
             self.initial_corr = None
@@ -377,8 +381,7 @@ class Ours(CLManagerBase):
             self.optimizer.step()
             #self.update_gradstat(self.sample_num, y)
             
-            if self.sample_num >= 2:
-                self.update_correlation(y)
+            self.update_correlation(y)
 
             if not self.frozen:
                 self.calculate_fisher()
@@ -490,16 +493,13 @@ class Ours(CLManagerBase):
                                 cor_dic[y.item()].append(sub_sampled)
             centered_list = []
             key_list = list(cor_dic.keys())
-
             for key in key_list:
                 stacked_tensor = torch.stack(cor_dic[key])
-                norm_tensor = torch.norm(stacked_tensor, p=2, dim=1) # make unit vector
-                
-                for i in range(len(norm_tensor)):
-                    stacked_tensor[i] /= norm_tensor[i]
-                
+                if len(key_list)>=2:
+                    norm_tensor = torch.norm(stacked_tensor, p=2, dim=1) # make unit vector
+                    for i in range(len(norm_tensor)):
+                        stacked_tensor[i] /= norm_tensor[i]
                 centered_list.append(stacked_tensor)
-                
             for i, key_i in enumerate(key_list):
                 for j, key_j in enumerate(key_list):
                     if key_i > key_j:
@@ -721,9 +721,9 @@ class OurMemory(MemoryBase):
         cls_cnt_sum = torch.zeros(n_cls)
         for i, cnt in enumerate(self.usage_count):
             cls_cnt_sum[self.labels[i]] += cnt
-        print('\n\n')
-        print("cls_cnt_sum:", cls_cnt_sum.numpy().round(4))
-        print("cls_cnt_avg:", (cls_cnt_sum/torch.Tensor([len(self.cls_idx[i]) for i in range(n_cls)])).numpy().round(4))
+        #print('\n\n')
+        #print("cls_cnt_sum:", cls_cnt_sum.numpy().round(4))
+        #print("cls_cnt_avg:", (cls_cnt_sum/torch.Tensor([len(self.cls_idx[i]) for i in range(n_cls)])).numpy().round(4))
 
         sim_matrix = torch.zeros((n_cls, n_cls))
         self_score = torch.ones(n_cls)
@@ -733,27 +733,27 @@ class OurMemory(MemoryBase):
                 sim_matrix[j][i] = sim_dict[i][j]
                 if i == j:
                     self_score -= sim_dict[i][i]
-        print("sim_matrix:\n", sim_matrix.numpy().round(4))
+        #print("sim_matrix:\n", sim_matrix.numpy().round(4))
 
         cls_score_sum = (sim_matrix * cls_cnt_sum).sum(dim=1)
-        print("cls_score_sum:", cls_score_sum.numpy().round(4))
+        #print("cls_score_sum:", cls_score_sum.numpy().round(4))
 
         sample_score = cls_score_sum[torch.LongTensor(self.labels)] + torch.Tensor(self.usage_count)*self_score[torch.LongTensor(self.labels)]
 
         sample_score /= len(self.images)
-        print("sample_score mean, std:", sample_score.mean().item(), sample_score.std().item())
+        #print("sample_score mean, std:", sample_score.mean().item(), sample_score.std().item())
         cls_score_sum = torch.zeros(n_cls)
         for i in range(len(self.images)):
             cls_score_sum[self.labels[i]] += sample_score[i]
-        print("cls_score sum, mean:", cls_score_sum.numpy().round(4), (cls_score_sum/torch.Tensor(self.cls_count)).numpy().round(4))
+        #print("cls_score sum, mean:", cls_score_sum.numpy().round(4), (cls_score_sum/torch.Tensor(self.cls_count)).numpy().round(4))
 
         prob = F.softmax(torch.Tensor(-sample_score/self.T), dim=0)
 
         cls_prob_sum = torch.zeros(n_cls)
         for i in range(len(self.images)):
             cls_prob_sum[self.labels[i]] += prob[i]
-        print("prob sum, mean:", cls_prob_sum.numpy().round(4), (cls_prob_sum / torch.Tensor(self.cls_count)).numpy().round(4))
-        print('\n\n')
+        #print("prob sum, mean:", cls_prob_sum.numpy().round(4), (cls_prob_sum / torch.Tensor(self.cls_count)).numpy().round(4))
+        #print('\n\n')
 
         return prob.numpy()
     
