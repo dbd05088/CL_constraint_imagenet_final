@@ -271,7 +271,7 @@ class Ours(CLManagerBase):
             self.initial_corr = total_corr / total_corr_count
             self_corr = 0.0
             for i in range(len_key):
-                if self.corr_map[i][j] is not None:
+                if self.corr_map[i][i] is not None:
                     self_corr += self.corr_map[i][i]
             self_corr_avg = total_corr / total_corr_count
         else:
