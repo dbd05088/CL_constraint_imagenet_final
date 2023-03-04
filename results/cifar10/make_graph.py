@@ -157,8 +157,12 @@ fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(width, height), sharex=True)
 
 exp_list = os.listdir()
 for exp in exp_list:
-    if exp != 'make_graph.py':
-        plot_acc_and_flops(ax1, ax2, exp, exp)
+    if exp != 'make_graph.py' and ".pdf" not in exp:
+        k_value = exp.split('_')[5]
+        t_value = exp.split('_')[5]
+        if k_value == "k8":
+            print(exp)
+            plot_acc_and_flops(ax1, ax2, exp, exp)
 # plot_from_log(ax1, 'corr_relu_layer_10_4_100', 'corr_layer', 1, 1, seeds=(1, 2, 3), smooth=True)
 # plot_from_log(ax1, 'corr_with_relu_10_4_100', 'corr', 1, 1, seeds=(1, 2, 3), smooth=True)
 # plot_from_log(ax1, 'ours_distill_10_4_100', 'normal', 1, 1, seeds=(1, 2, 3), smooth=True)
@@ -293,4 +297,4 @@ ax2.set_axisbelow(True)
 ax2.set_ylim(0, 140)
 # ax2.legend()
 plt.tight_layout()
-plt.savefig('result.pdf')
+plt.savefig('k8_result.pdf')
