@@ -506,7 +506,8 @@ class Ours(CLManagerBase):
                         continue          
                     matmul_result = torch.matmul(centered_list[i], centered_list[j].T)
                     if key_i==key_j:
-                        matmul_result.fill_diagonal_(0)
+                        #matmul_result.fill_diagonal_(0)
+                        matmul_result = torch.stack([torch.cat([t[0:max(i,0)],t[min(i+1,len(matmul_result)):]]) for i, t in enumerate(matmul_result)])
 
                     cor_i_j = torch.mean(matmul_result).item()
                     if not math.isnan(cor_i_j):
