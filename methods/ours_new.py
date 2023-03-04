@@ -492,10 +492,7 @@ class Ours(CLManagerBase):
             key_list = list(cor_dic.keys())
 
             for key in key_list:
-                #print("key", key, "len", len(cor_dic[key]))
                 stacked_tensor = torch.stack(cor_dic[key])
-                #print("stacked_tensor", stacked_tensor.shape)
-                #stacked_tensor -= torch.mean(stacked_tensor, dim=0) # make zero mean
                 norm_tensor = torch.norm(stacked_tensor, p=2, dim=1) # make unit vector
                 
                 for i in range(len(norm_tensor)):
@@ -506,8 +503,12 @@ class Ours(CLManagerBase):
             for i, key_i in enumerate(key_list):
                 for j, key_j in enumerate(key_list):
                     if key_i > key_j:
-                        continue           
-                    cor_i_j = torch.mean(torch.matmul(centered_list[i], centered_list[j].T)).item()
+                        continue          
+                    matmul_result = torch.matmul(centered_list[i], centered_list[j].T)
+                    if key_i==key_j:
+                        matmul_result.fill_diagonal_(0)
+
+                    cor_i_j = torch.mean(matmul_result).item()
                     if not math.isnan(cor_i_j):
                         current_corr_map[key_i][key_j].append(cor_i_j)
                         
