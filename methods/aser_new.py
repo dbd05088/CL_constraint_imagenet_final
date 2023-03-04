@@ -22,6 +22,8 @@ class ASER(CLManagerBase):
         self.k = kwargs["k"]
         self.n_smp_cls = int(kwargs["n_smp_cls"])
         self.candidate_size = kwargs["aser_cands"]
+        print("candidate_size")
+        print(self.candidate_size)
         self.waiting_candidate_batch = []
         self.waiting_eval_batch = []
         super().__init__(train_datalist, test_datalist, device, **kwargs)
@@ -295,7 +297,13 @@ class ASER(CLManagerBase):
                 cand_y = candidate_data['label'].to(self.device)
                 eval_coop_x = eval_data['image'].to(self.device)
                 eval_coop_y = eval_data['label'].to(self.device)
-                
+                '''
+                print("eval_adv_x", len(eval_adv_x))
+                print("current_train_x", len(current_train_x))
+                print("cand_train_x", len(cand_train_x))
+                print("cand_x", len(cand_x))
+                print("eval_coop_x", len(eval_coop_x))
+                '''
                 self.model.eval()
                 sv_matrix_adv = self.compute_knn_sv(eval_adv_x, eval_adv_y, cand_x, cand_y, self.k)
                 sv_matrix_coop = self.compute_knn_sv(eval_coop_x, eval_coop_y, cand_x, cand_y, self.k)
@@ -315,7 +323,10 @@ class ASER(CLManagerBase):
                 data = batch_data
                 x = data['image']
                 y = data['label']
-                
+            
+            x = x.to(self.device)
+            y = y.to(self.device)
+            
             #else:
                 #self.memory.register_batch_indices(batch_indices = cand_index[ret_ind][:memory_batch_size])
             #self.before_model_update()
@@ -332,7 +343,7 @@ class ASER(CLManagerBase):
                 loss.backward()
                 self.optimizer.step()
 
-            self.total_flops += (len(y) * self.backward_flops)
+            self.total_flops += (len(y) * (self.forward_flops + self.backward_flops))
 
             self.after_model_update()
 
@@ -404,6 +415,7 @@ class AserMemory(MemoryBase):
         else:
             indices = []
             # balanced sampling
+            print()
             for klass in range(len(self.cls_idx)):
                 candidates = self.cls_idx[klass]
                 if discard_indices is not None:
