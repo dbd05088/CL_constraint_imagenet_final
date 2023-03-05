@@ -384,7 +384,7 @@ class Ours(CLManagerBase):
                 autograd_hacks.compute_grad1(self.model)
                 self.optimizer.step()
             
-            self.update_correlation(y)
+            #self.update_correlation(y)
 
             if not self.frozen:
                 self.calculate_fisher()
@@ -477,7 +477,7 @@ class Ours(CLManagerBase):
 
     @torch.no_grad()
     def update_correlation(self, labels):
-        
+        '''
         current_corr_map = copy.deepcopy(self.corr_map)
         curr_corr_key_list = list(current_corr_map.keys())
         for key_i in curr_corr_key_list:
@@ -490,7 +490,7 @@ class Ours(CLManagerBase):
                 if p.requires_grad is True and p.grad is not None and n==layer:
                     if not p.grad.isnan().any():
                         for i, y in enumerate(labels):
-                            sub_sampled = p.grad1[i].clone().detach().clamp(-1000, 1000).flatten()[self.selected_mask[n]]
+                            sub_sampled = p.grad1[i].clone().detach().cpu().clamp(-1000, 1000).flatten()[self.selected_mask[n]]
                             if y.item() not in cor_dic.keys():
                                 cor_dic[y.item()] = [sub_sampled]
                             else:
@@ -534,6 +534,25 @@ class Ours(CLManagerBase):
                     if len(current_corr_map[key_i][key_j]) != 0:
                         if not math.isnan(current_corr_map[key_i][key_j][0]):
                             self.corr_map[key_i][key_j] += self.grad_ema_ratio * (np.mean(current_corr_map[key_i][key_j]) - self.corr_map[key_i][key_j])
+        '''
+        selected_grads = []
+        for n, p in self.model.named_parameters():
+            if p.requires_grad is True and p.grad is not None and n in self.selected_mask.keys():
+                selected_grads.append(p.grad1.clone().detach().clamp(-1000, 1000).flatten(start_dim=1)[:, self.selected_mask[n]])
+        stacked_grads = torch.cat(selected_grads, dim=1)
+        similarity_matrix = F.cosine_similarity(stacked_grads.unsqueeze(1), stacked_grads.unsqueeze(0), dim=2).cpu()
+        self.total_flops += stacked_grads.shape[0]*stacked_grads.shape[0]*2*stacked_grads.shape[1]/10e9
+
+        for i in range(len(labels)):
+            for j in range(i+1, len(labels)):
+                if labels[i] < labels[j]:
+                    y1, y2 = labels[i].item(), labels[j].item()
+                else:
+                    y1, y2 = labels[j].item(), labels[i].item()
+                if self.corr_map[y1][y2] is None:
+                    self.corr_map[y1][y2] = similarity_matrix[i][j]
+                else:
+                    self.corr_map[y1][y2] += self.grad_ema_ratio * (similarity_matrix[i][j] - self.corr_map[y1][y2])
     '''
     def update_correlation(self, labels):
         cor_dic = {}
@@ -672,6 +691,13 @@ class OurMemory(MemoryBase):
             self.usage_count *= (1-self.count_decay_ratio)
             self.class_usage_count *= (1-self.count_decay_ratio)
         
+        similarity_matrix = {}
+        for i in range(len(self.cls_list)):
+            similarity_matrix[i] = {}
+            for j in range(len(self.cls_list)):
+                if i<=j:
+                    similarity_matrix[i][j] = 0.5
+
         if similarity_matrix is None:
             return self.balanced_retrieval(size)
         else:
