@@ -361,8 +361,6 @@ class Ours(CLManagerBase):
             data = self.get_batch()
             x = data["image"].to(self.device)
             y = data["label"].to(self.device)
-            print("y")
-            print(y)
             #self.before_model_update()
             self.optimizer.zero_grad()
 
@@ -548,10 +546,8 @@ class Ours(CLManagerBase):
                             cor_dic[y.item()] = [sub_sampled]
                         else:
                             cor_dic[y.item()].append(sub_sampled)
-
         centered_list = []
         key_list = list(cor_dic.keys())
-
         for key in key_list:
             #print("key", key, "len", len(cor_dic[key]))
             stacked_tensor = torch.stack(cor_dic[key])
@@ -733,5 +729,4 @@ class OurMemory(MemoryBase):
         #print('\n\n')
 
         return prob.numpy()
-    
     
