@@ -167,6 +167,10 @@ class Ours(CLManagerBase):
         self.future_sampling = True
         self.future_retrieval = True
 
+        self.sim_matrix = torch.zeros([0, 0]).to(self.device)
+        self.self_cls_sim = 0.0
+        self.other_cls_sim = 0.0
+
         self.waiting_batch = []
         for i in range(self.future_steps):
             self.load_batch()
@@ -189,7 +193,7 @@ class Ours(CLManagerBase):
 
         if  self.future_num_updates >= 1:
             if self.future_sample_num >= self.corr_warm_up:
-                self.generate_waiting_batch(int(self.future_num_updates), self.corr_map)
+                self.generate_waiting_batch(int(self.future_num_updates), self.sim_matrix.cpu())
             else:
                 self.generate_waiting_batch(int(self.future_num_updates))
             self.future_num_updates -= int(self.future_num_updates)
@@ -256,43 +260,56 @@ class Ours(CLManagerBase):
 
 
     def future_add_new_class(self):
+        n = self.sim_matrix.size(0)
+        if n > 0:
+            prev_sim_matrix = copy.deepcopy(self.sim_matrix)
+            diagonal_avg = torch.diag(self.sim_matrix).mean()
+            if n > 1:
+                off_diagonal_avg = (torch.mean(self.sim_matrix) - diagonal_avg/n)*n/(n-1)
+            else:
+                off_diagonal_avg = 0
+            self.sim_matrix = torch.ones([n+1, n+1]).to(self.device)*off_diagonal_avg
+            self.sim_matrix[n, n] = diagonal_avg
+            self.sim_matrix[0:n, 0:n] = prev_sim_matrix
+        else:
+            self.sim_matrix = torch.zeros([1, 1]).to(self.device)
         ### for calculating similarity ###
-        len_key = len(self.corr_map.keys())
-        if len_key > 1:
-            total_corr = 0.0
-            total_corr_count = 0
-            self_corr_count = 0
-            for i in range(len_key):
-                for j in range(i+1, len_key):
-                    if self.corr_map[i][j] is not None:
-                        total_corr += self.corr_map[i][j]
-                        total_corr_count += 1
-            if total_corr_count >= 1:
-                self.initial_corr = total_corr / (total_corr_count)
-            else:
-                self.initial_corr = 0.0
-            self_corr = 0.0
-            for i in range(len_key):
-                if self.corr_map[i][i] is not None:
-                    self_corr += self.corr_map[i][i]
-                    self_corr_count += 1
-            if self_corr_count >= 1:
-                self_corr_avg = total_corr / (self_corr_count+1e-10)
-            else:
-                self_corr_avg = 0.5
-        else:
-            self.initial_corr = None
-        
-        for i in range(len_key):
-            # 모든 class의 avg_corr로 initialize
-            self.corr_map[i][len_key] = self.initial_corr
-
-        # 자기 자신은 1로 initialize
-        self.corr_map[len_key] = {}
-        if len_key > 1:
-            self.corr_map[len_key][len_key] = self_corr_avg
-        else:
-            self.corr_map[len_key][len_key] = None
+        # len_key = len(self.corr_map.keys())
+        # if len_key > 1:
+        #     total_corr = 0.0
+        #     total_corr_count = 0
+        #     self_corr_count = 0
+        #     for i in range(len_key):
+        #         for j in range(i+1, len_key):
+        #             if self.corr_map[i][j] is not None:
+        #                 total_corr += self.corr_map[i][j]
+        #                 total_corr_count += 1
+        #     if total_corr_count >= 1:
+        #         self.initial_corr = total_corr / (total_corr_count)
+        #     else:
+        #         self.initial_corr = 0.0
+        #     self_corr = 0.0
+        #     for i in range(len_key):
+        #         if self.corr_map[i][i] is not None:
+        #             self_corr += self.corr_map[i][i]
+        #             self_corr_count += 1
+        #     if self_corr_count >= 1:
+        #         self_corr_avg = total_corr / (self_corr_count+1e-10)
+        #     else:
+        #         self_corr_avg = 0.5
+        # else:
+        #     self.initial_corr = None
+        #
+        # for i in range(len_key):
+        #     # 모든 class의 avg_corr로 initialize
+        #     self.corr_map[i][len_key] = self.initial_corr
+        #
+        # # 자기 자신은 1로 initialize
+        # self.corr_map[len_key] = {}
+        # if len_key > 1:
+        #     self.corr_map[len_key][len_key] = self_corr_avg
+        # else:
+        #     self.corr_map[len_key][len_key] = None
 
 
     def add_new_class(self, class_name, sample=None):
@@ -429,27 +446,27 @@ class Ours(CLManagerBase):
         return total_loss / iterations, correct / num_data
 
     def online_evaluate(self, test_list, sample_num, batch_size, n_worker, cls_dict, cls_addition, data_time):
-        self.corr_map_list.append(copy.deepcopy(self.corr_map))
-        self.sample_count_list.append(copy.deepcopy(self.memory.usage_count))
-        self.labels_list.append(copy.deepcopy(self.memory.labels))
-        
-        # store한 애들 저장
-        corr_map_name = "corr_map_list_T_" + str(self.T) + "_decay_" + str(self.k_coeff) + ".pickle"
-        sample_count_name = "sample_count_list_T_" + str(self.T) + "_decay_" + str(self.k_coeff) + ".pickle"
-        labels_list_name = "labels_list_T_" + str(self.T) + "_decay_" + str(self.k_coeff) + ".pickle"
-        
-        # print("corr_map_name", corr_map_name)
-        # print("sample_count_name", sample_count_name)
-        # print("labels_list_name", labels_list_name)
-        
-        with open(corr_map_name, 'wb') as f:
-            pickle.dump(self.corr_map_list, f, pickle.HIGHEST_PROTOCOL)
-        
-        with open(sample_count_name, 'wb') as f:
-            pickle.dump(self.sample_count_list, f, pickle.HIGHEST_PROTOCOL)
-        
-        with open(labels_list_name, 'wb') as f:
-            pickle.dump(self.labels_list, f, pickle.HIGHEST_PROTOCOL)
+        # self.corr_map_list.append(copy.deepcopy(self.corr_map))
+        # self.sample_count_list.append(copy.deepcopy(self.memory.usage_count))
+        # self.labels_list.append(copy.deepcopy(self.memory.labels))
+        #
+        # # store한 애들 저장
+        # corr_map_name = "corr_map_list_T_" + str(self.T) + "_decay_" + str(self.k_coeff) + ".pickle"
+        # sample_count_name = "sample_count_list_T_" + str(self.T) + "_decay_" + str(self.k_coeff) + ".pickle"
+        # labels_list_name = "labels_list_T_" + str(self.T) + "_decay_" + str(self.k_coeff) + ".pickle"
+        #
+        # # print("corr_map_name", corr_map_name)
+        # # print("sample_count_name", sample_count_name)
+        # # print("labels_list_name", labels_list_name)
+        #
+        # with open(corr_map_name, 'wb') as f:
+        #     pickle.dump(self.corr_map_list, f, pickle.HIGHEST_PROTOCOL)
+        #
+        # with open(sample_count_name, 'wb') as f:
+        #     pickle.dump(self.sample_count_list, f, pickle.HIGHEST_PROTOCOL)
+        #
+        # with open(labels_list_name, 'wb') as f:
+        #     pickle.dump(self.labels_list, f, pickle.HIGHEST_PROTOCOL)
         
         return super().online_evaluate(test_list, sample_num, batch_size, n_worker, cls_dict, cls_addition, data_time)
 
@@ -498,30 +515,48 @@ class Ours(CLManagerBase):
             for key_j in curr_corr_key_list:
                 current_corr_map[key_i][key_j] = []
 
+        labels = labels.detach().clone()
+        n_classes = self.sim_matrix.size(0)
+        batch_size = len(labels)
+        update_matrix = torch.zeros_like(self.sim_matrix).flatten()
+        labelcount_matrix = torch.zeros_like(self.sim_matrix).flatten()
         selected_grads = []
         for n, p in self.model.named_parameters():
             if p.requires_grad is True and p.grad is not None and n in self.selected_mask.keys():
-                selected_grads.append(p.grad1.clone().detach().clamp(-1000, 1000).flatten(start_dim=1)[:, self.selected_mask[n]])
+                selected_grads.append(p.grad1.detach().clone().clamp(-1000, 1000).flatten(start_dim=1)[:, self.selected_mask[n]])
         stacked_grads = torch.cat(selected_grads, dim=1)
-        similarity_matrix = F.cosine_similarity(stacked_grads.unsqueeze(1), stacked_grads.unsqueeze(0), dim=2).cpu()
+        similarity_matrix = F.cosine_similarity(stacked_grads.unsqueeze(1), stacked_grads.unsqueeze(0), dim=2)
         self.total_flops += stacked_grads.shape[0]*stacked_grads.shape[0]*2*stacked_grads.shape[1]/10e9
 
-        for i in range(len(labels)):
-            for j in range(i+1, len(labels)):
-                if labels[i] < labels[j]:
-                    y1, y2 = labels[i].item(), labels[j].item()
-                else:
-                    y1, y2 = labels[j].item(), labels[i].item()
-                current_corr_map[y1][y2].append(similarity_matrix[i][j])
+        count_matrix = torch.ones_like(similarity_matrix).fill_diagonal_(0.0).flatten()
+        index_matrix = (labels.unsqueeze(1)*n_classes + labels.unsqueeze(0)).flatten()
+        similarity_matrix = similarity_matrix.fill_diagonal_(0.0).flatten()
 
-        for key_i in curr_corr_key_list:
-            for key_j in curr_corr_key_list:
-                if not math.isnan(np.mean(current_corr_map[key_i][key_j])):
-                    if self.corr_map[key_i][key_j] is None:
-                        self.corr_map[key_i][key_j] = np.mean(current_corr_map[key_i][key_j])
-                    else:
-                        self.corr_map[key_i][key_j] += self.grad_ema_ratio * (
-                                    np.mean(current_corr_map[key_i][key_j]) - self.corr_map[key_i][key_j])
+        update_matrix = update_matrix.scatter_add(0, index_matrix, similarity_matrix)
+        labelcount_matrix = labelcount_matrix.scatter_add(0, index_matrix, count_matrix)
+        update_matrix = update_matrix.view(self.sim_matrix.shape)
+        labelcount_matrix = labelcount_matrix.view(self.sim_matrix.shape)
+        update_mask = labelcount_matrix > 0
+        update_matrix[update_mask] /= labelcount_matrix[update_mask]
+        self.sim_matrix[update_mask] += self.grad_ema_ratio * (update_matrix[update_mask] - self.sim_matrix[update_mask])
+        # print(self.sim_matrix)
+
+        # for i in range(len(labels)):
+        #     for j in range(i+1, len(labels)):
+        #         if labels[i] < labels[j]:
+        #             y1, y2 = labels[i].item(), labels[j].item()
+        #         else:
+        #             y1, y2 = labels[j].item(), labels[i].item()
+        #         current_corr_map[y1][y2].append(similarity_matrix[i][j])
+        #
+        # for key_i in curr_corr_key_list:
+        #     for key_j in curr_corr_key_list:
+        #         if not math.isnan(np.mean(current_corr_map[key_i][key_j])):
+        #             if self.corr_map[key_i][key_j] is None:
+        #                 self.corr_map[key_i][key_j] = np.mean(current_corr_map[key_i][key_j])
+        #             else:
+        #                 self.corr_map[key_i][key_j] += self.grad_ema_ratio * (
+        #                             np.mean(current_corr_map[key_i][key_j]) - self.corr_map[key_i][key_j])
 
         # for layer in list(self.selected_mask.keys()):
         #     cor_dic = {}
@@ -609,47 +644,6 @@ class Ours(CLManagerBase):
                 else:
                     self.corr_map[key_i][key_j] += self.grad_ema_ratio * (cor_i_j - self.corr_map[key_i][key_j])
     '''
-
-    def update_gradstat(self, sample_num, labels):
-        for n, p in self.model.named_parameters():
-            if n in self.grad_mavg[0]:
-                if p.requires_grad is True and p.grad is not None:
-                    if not p.grad.isnan().any():
-                        for i, y in enumerate(labels):
-                            ### use sub-sampled gradient ###
-                            sub_sampled = p.grad1[i].clone().detach().clamp(-1000, 1000).flatten()[self.selected_mask[n]]
-                            #self.grad_dict[y.item()][n].append(sub_sampled)
-
-                            self.grad_mavg[y.item()][n] += self.grad_ema_ratio * (sub_sampled - self.grad_mavg[y.item()][n])
-                            self.grad_mavgsq[y.item()][n] += self.grad_ema_ratio * (sub_sampled ** 2 - self.grad_mavgsq[y.item()][n])
-                            self.grad_mvar[y.item()][n] = self.grad_mavgsq[y.item()][n] - self.grad_mavg[y.item()][n] ** 2
-                            self.grad_criterion[y.item()][n] = (
-                                        torch.abs(self.grad_mavg[y.item()][n]) / (torch.sqrt(self.grad_mvar[y.item()][n]) + 1e-10)).mean().item() 
-                            self.grad_cls_score_mavg[y.item()][n] += self.grad_ema_ratio * (self.grad_criterion[y.item()][n] - self.grad_cls_score_mavg[y.item()][n])
-       
-        for cls, dic in enumerate(self.grad_criterion):
-            self.writer.add_scalars("grad_criterion"+str(cls), dic, sample_num)
-
-        # just avg_mean score
-        label_count = torch.zeros(len(self.exposed_classes)).to(self.device)
-        total_label_count = len(labels)
-        for label in labels:
-            label_count[label.item()] += 1
-        label_ratio = label_count / total_label_count
-
-        ### current scoring 방식 ### 
-        self.grad_score_per_layer = {layer: torch.sum(torch.Tensor([self.grad_criterion[klass][layer] for klass in range(len(self.exposed_classes))]).to(self.device) * label_ratio).item() for layer in list(self.grad_criterion[0].keys())}
-        self.writer.add_scalars("layer_score", self.grad_score_per_layer, sample_num)
-
-
-    def calculate_covariance(self):
-        last_key = list(self.grad_dict[0].keys())[-1]
-        tensor_list = []
-        for cls in range(len(self.exposed_classes)):
-            tensor_list.append(torch.mean(torch.stack(self.grad_dict[cls][last_key]), dim=0))
-        tensor_list = torch.stack(tensor_list)
-        corr_coeff = torch.corrcoef(tensor_list)
-        # print(corr_coeff)
 
     def get_layer_number(self, n):
         name = n.split('.')
@@ -764,7 +758,7 @@ class OurMemory(MemoryBase):
                 self.class_usage_count[self.labels[i]]+=1    
             return memory_batch
         
-    def get_similarity_weight(self, sim_dict):
+    def get_similarity_weight(self, sim_matrix):
         n_cls = len(self.cls_list)
         cls_cnt_sum = torch.zeros(n_cls)
         for i, cnt in enumerate(self.usage_count):
@@ -772,14 +766,14 @@ class OurMemory(MemoryBase):
         # print('\n\n')
         # print("cls_cnt_sum:", cls_cnt_sum.numpy().round(4))
         # print("cls_cnt_avg:", (cls_cnt_sum/torch.Tensor([len(self.cls_idx[i]) for i in range(n_cls)])).numpy().round(4))
-        sim_matrix = torch.zeros((n_cls, n_cls))
+        # sim_matrix = torch.zeros((n_cls, n_cls))
         self_score = torch.ones(n_cls)
-        for i in range(n_cls):
-            for j in range(i, n_cls):
-                sim_matrix[i][j] = sim_dict[i][j]
-                sim_matrix[j][i] = sim_dict[i][j]
-                if i == j:
-                    self_score -= sim_dict[i][i]
+        self_score -= sim_matrix.diag()
+        #     for j in range(i, n_cls):
+        #         sim_matrix[i][j] = sim_dict[i][j]
+        #         sim_matrix[j][i] = sim_dict[i][j]
+        #         if i == j:
+        #             self_score -= sim_dict[i][i]
         # print("sim_matrix:\n", sim_matrix.numpy().round(4))
 
         cls_score_sum = (sim_matrix * cls_cnt_sum).sum(dim=1)
@@ -789,17 +783,17 @@ class OurMemory(MemoryBase):
 
         sample_score /= len(self.images)
         # print("sample_score mean, std:", sample_score.mean().item(), sample_score.std().item())
-        cls_score_sum = torch.zeros(n_cls)
-        for i in range(len(self.images)):
-            cls_score_sum[self.labels[i]] += sample_score[i]
+        # cls_score_sum = torch.zeros(n_cls)
+        # for i in range(len(self.images)):
+        #     cls_score_sum[self.labels[i]] += sample_score[i]
         # print("cls_score sum, mean:", cls_score_sum.numpy().round(4), (cls_score_sum/torch.Tensor(self.cls_count)).numpy().round(4))
 
         prob = F.softmax(torch.Tensor(-sample_score/self.T), dim=0)
 
-        cls_prob_sum = torch.zeros(n_cls)
-        for i in range(len(self.images)):
-            cls_prob_sum[self.labels[i]] += prob[i]
-        print("prob sum, mean:", cls_prob_sum.numpy().round(4), (cls_prob_sum / torch.Tensor(self.cls_count)).numpy().round(4))
+        # cls_prob_sum = torch.zeros(n_cls)
+        # for i in range(len(self.images)):
+        #     cls_prob_sum[self.labels[i]] += prob[i]
+        # print("prob sum, mean:", cls_prob_sum.numpy().round(4), (cls_prob_sum / torch.Tensor(self.cls_count)).numpy().round(4))
         # print('\n\n')
 
         return prob.numpy()
