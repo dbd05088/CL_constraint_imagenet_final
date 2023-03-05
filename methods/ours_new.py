@@ -133,7 +133,7 @@ class Ours(CLManagerBase):
     def initialize_future(self):
         self.data_stream = iter(self.train_datalist)
         self.dataloader = MultiProcessLoader(self.n_worker, self.cls_dict, self.train_transform, self.data_dir, self.transform_on_gpu, self.cpu_transform, self.device, self.use_kornia, self.transform_on_worker)
-        self.memory = OurMemory(self.memory_size, self.T, self.count_decay_ratio, self.k_coeff, self.device)
+        self.memory = OurMemory(self.memory_size, self.T, self.count_decay_ratio, self.k_coeff)
 
         self.grad_score_per_layer = None
 
@@ -261,19 +261,25 @@ class Ours(CLManagerBase):
         if len_key > 1:
             total_corr = 0.0
             total_corr_count = 0
+            self_corr_count = 0
             for i in range(len_key):
                 for j in range(i+1, len_key):
                     if self.corr_map[i][j] is not None:
                         total_corr += self.corr_map[i][j]
                         total_corr_count += 1
-            if total_corr_count == 0:
-                total_corr_count = 1
-            self.initial_corr = total_corr / total_corr_count
+            if total_corr_count >= 1:
+                self.initial_corr = total_corr / (total_corr_count)
+            else:
+                self.initial_corr = 0.0
             self_corr = 0.0
             for i in range(len_key):
                 if self.corr_map[i][i] is not None:
                     self_corr += self.corr_map[i][i]
-            self_corr_avg = total_corr / total_corr_count
+                    self_corr_count += 1
+            if self_corr_count >= 1:
+                self_corr_avg = total_corr / (self_corr_count+1e-10)
+            else:
+                self_corr_avg = 0.5
         else:
             self.initial_corr = None
         
@@ -361,6 +367,8 @@ class Ours(CLManagerBase):
             data = self.get_batch()
             x = data["image"].to(self.device)
             y = data["label"].to(self.device)
+            # print("y")
+            # print(y)
             #self.before_model_update()
             self.optimizer.zero_grad()
 
@@ -372,19 +380,15 @@ class Ours(CLManagerBase):
                     self.freeze_layers()
 
             _, preds = logit.topk(self.topk, 1, True, True)
-
-            if self.use_amp:
-                self.scaler.scale(loss).backward()
-                autograd_hacks.compute_grad1(self.model)
-                self.scaler.step(self.optimizer)
-                self.scaler.update()
-            else:
-                loss.backward()
-
-                autograd_hacks.compute_grad1(self.model)
-                self.optimizer.step()
             
-            #self.update_correlation(y)
+            loss.backward()
+            autograd_hacks.compute_grad1(self.model)
+            
+            self.optimizer.step()
+            #self.update_gradstat(self.sample_num, y)
+            
+            if self.sample_num >= 2:
+                self.update_correlation(y)
 
             if not self.frozen:
                 self.calculate_fisher()
@@ -474,67 +478,15 @@ class Ours(CLManagerBase):
             self.memory.replace_sample(sample, sample_num, idx_to_replace)
         else:
             self.memory.replace_sample(sample, sample_num)
-
-    @torch.no_grad()
+    
     def update_correlation(self, labels):
-        '''
+        
         current_corr_map = copy.deepcopy(self.corr_map)
         curr_corr_key_list = list(current_corr_map.keys())
         for key_i in curr_corr_key_list:
             for key_j in curr_corr_key_list:
                 current_corr_map[key_i][key_j] = []
-                
-        for layer in list(self.selected_mask.keys()):
-            cor_dic = {}
-            for n, p in self.model.named_parameters():
-                if p.requires_grad is True and p.grad is not None and n==layer:
-                    if not p.grad.isnan().any():
-                        for i, y in enumerate(labels):
-                            sub_sampled = p.grad1[i].clone().detach().cpu().clamp(-1000, 1000).flatten()[self.selected_mask[n]]
-                            if y.item() not in cor_dic.keys():
-                                cor_dic[y.item()] = [sub_sampled]
-                            else:
-                                cor_dic[y.item()].append(sub_sampled)
-            centered_list = []
-            key_list = list(cor_dic.keys())
-            for key in key_list:
-                stacked_tensor = torch.stack(cor_dic[key])
-                if len(key_list)>=2:
-                    norm_tensor = torch.norm(stacked_tensor, p=2, dim=1) # make unit vector
-                    self.total_flops += (stacked_tensor.shape[0] * stacked_tensor.shape[1]) / 10e9
-                    for i in range(len(norm_tensor)):
-                        stacked_tensor[i] /= norm_tensor[i]
-                centered_list.append(stacked_tensor)
-            for i, key_i in enumerate(key_list):
-                for j, key_j in enumerate(key_list):
-                    if key_i > key_j:
-                        continue     
-                    matmul_result = torch.matmul(centered_list[i], centered_list[j].T)
-                    self.total_flops += (len(matmul_result.flatten()) * 2) /10e9
-                    self.total_flops += ((centered_list[i].shape[0]-1)*centered_list[j].shape[0]*(2*centered_list[i].shape[0]-1))/(2*10e9)
-                    if key_i==key_j:
-                        #matmul_result.fill_diagonal_(0)
-                        matmul_result = torch.stack([torch.cat([t[0:max(i,0)],t[min(i+1,len(matmul_result)):]]) for i, t in enumerate(matmul_result)])
 
-                    cor_i_j = torch.mean(matmul_result).item()
-                    self.total_flops += (matmul_result.shape[0] * matmul_result.shape[1])/10e9
-                    
-                    if not math.isnan(cor_i_j):
-                        current_corr_map[key_i][key_j].append(cor_i_j)
-                        
-        for i, key_i in enumerate(curr_corr_key_list):
-            for j, key_j in enumerate(curr_corr_key_list):
-                if key_i > key_j:
-                    continue
-                if self.corr_map[key_i][key_j] is None:
-                    if len(current_corr_map[key_i][key_j]) != 0:
-                        if not math.isnan(current_corr_map[key_i][key_j][0]):
-                            self.corr_map[key_i][key_j] = np.mean(current_corr_map[key_i][key_j])
-                else:
-                    if len(current_corr_map[key_i][key_j]) != 0:
-                        if not math.isnan(current_corr_map[key_i][key_j][0]):
-                            self.corr_map[key_i][key_j] += self.grad_ema_ratio * (np.mean(current_corr_map[key_i][key_j]) - self.corr_map[key_i][key_j])
-        '''
         selected_grads = []
         for n, p in self.model.named_parameters():
             if p.requires_grad is True and p.grad is not None and n in self.selected_mask.keys():
@@ -549,10 +501,65 @@ class Ours(CLManagerBase):
                     y1, y2 = labels[i].item(), labels[j].item()
                 else:
                     y1, y2 = labels[j].item(), labels[i].item()
-                if self.corr_map[y1][y2] is None:
-                    self.corr_map[y1][y2] = similarity_matrix[i][j]
-                else:
-                    self.corr_map[y1][y2] += self.grad_ema_ratio * (similarity_matrix[i][j] - self.corr_map[y1][y2])
+                current_corr_map[y1][y2].append(similarity_matrix[i][j])
+
+        for key_i in curr_corr_key_list:
+            for key_j in curr_corr_key_list:
+                if not math.isnan(np.mean(current_corr_map[key_i][key_j])):
+                    if self.corr_map[key_i][key_j] is None:
+                        self.corr_map[key_i][key_j] = np.mean(current_corr_map[key_i][key_j])
+                    else:
+                        self.corr_map[key_i][key_j] += self.grad_ema_ratio * (
+                                    np.mean(current_corr_map[key_i][key_j]) - self.corr_map[key_i][key_j])
+
+        # for layer in list(self.selected_mask.keys()):
+        #     cor_dic = {}
+        #     for n, p in self.model.named_parameters():
+        #         if p.requires_grad is True and p.grad is not None and n==layer:
+        #             if not p.grad.isnan().any():
+        #                 for i, y in enumerate(labels):
+        #                     sub_sampled = p.grad1[i].clone().detach().clamp(-1000, 1000).flatten()[self.selected_mask[n]]
+        #                     if y.item() not in cor_dic.keys():
+        #                         cor_dic[y.item()] = [sub_sampled]
+        #                     else:
+        #                         cor_dic[y.item()].append(sub_sampled)
+        #     centered_list = []
+        #     key_list = list(cor_dic.keys())
+        #
+        #     for key in key_list:
+        #         stacked_tensor = torch.stack(cor_dic[key])
+        #         norm_tensor = torch.norm(stacked_tensor, p=2, dim=1) # make unit vector
+        #
+        #         for i in range(len(norm_tensor)):
+        #             stacked_tensor[i] /= norm_tensor[i]
+        #
+        #         centered_list.append(stacked_tensor)
+        #
+        #     for i, key_i in enumerate(key_list):
+        #         for j, key_j in enumerate(key_list):
+        #             if key_i > key_j:
+        #                 continue
+        #             matmul_result = torch.matmul(centered_list[i], centered_list[j].T)
+        #             if key_i==key_j:
+        #                 #matmul_result.fill_diagonal_(0)
+        #                 matmul_result = torch.stack([torch.cat([t[0:max(i,0)],t[min(i+1,len(matmul_result)):]]) for i, t in enumerate(matmul_result)])
+        #
+        #             cor_i_j = torch.mean(matmul_result).item()
+        #             if not math.isnan(cor_i_j):
+        #                 current_corr_map[key_i][key_j].append(cor_i_j)
+        #
+        # for i, key_i in enumerate(curr_corr_key_list):
+        #     for j, key_j in enumerate(curr_corr_key_list):
+        #         if key_i > key_j:
+        #             continue
+        #         if self.corr_map[key_i][key_j] is None:
+        #             if len(current_corr_map[key_i][key_j]) != 0:
+        #                 if not math.isnan(current_corr_map[key_i][key_j][0]):
+        #                     self.corr_map[key_i][key_j] = np.mean(current_corr_map[key_i][key_j])
+        #         else:
+        #             if len(current_corr_map[key_i][key_j]) != 0:
+        #                 if not math.isnan(current_corr_map[key_i][key_j][0]):
+        #                     self.corr_map[key_i][key_j] += self.grad_ema_ratio * (np.mean(current_corr_map[key_i][key_j]) - self.corr_map[key_i][key_j])
     '''
     def update_correlation(self, labels):
         cor_dic = {}
@@ -565,8 +572,10 @@ class Ours(CLManagerBase):
                             cor_dic[y.item()] = [sub_sampled]
                         else:
                             cor_dic[y.item()].append(sub_sampled)
+
         centered_list = []
         key_list = list(cor_dic.keys())
+
         for key in key_list:
             #print("key", key, "len", len(cor_dic[key]))
             stacked_tensor = torch.stack(cor_dic[key])
@@ -590,6 +599,47 @@ class Ours(CLManagerBase):
                     self.corr_map[key_i][key_j] += self.grad_ema_ratio * (cor_i_j - self.corr_map[key_i][key_j])
     '''
 
+    def update_gradstat(self, sample_num, labels):
+        for n, p in self.model.named_parameters():
+            if n in self.grad_mavg[0]:
+                if p.requires_grad is True and p.grad is not None:
+                    if not p.grad.isnan().any():
+                        for i, y in enumerate(labels):
+                            ### use sub-sampled gradient ###
+                            sub_sampled = p.grad1[i].clone().detach().clamp(-1000, 1000).flatten()[self.selected_mask[n]]
+                            #self.grad_dict[y.item()][n].append(sub_sampled)
+
+                            self.grad_mavg[y.item()][n] += self.grad_ema_ratio * (sub_sampled - self.grad_mavg[y.item()][n])
+                            self.grad_mavgsq[y.item()][n] += self.grad_ema_ratio * (sub_sampled ** 2 - self.grad_mavgsq[y.item()][n])
+                            self.grad_mvar[y.item()][n] = self.grad_mavgsq[y.item()][n] - self.grad_mavg[y.item()][n] ** 2
+                            self.grad_criterion[y.item()][n] = (
+                                        torch.abs(self.grad_mavg[y.item()][n]) / (torch.sqrt(self.grad_mvar[y.item()][n]) + 1e-10)).mean().item() 
+                            self.grad_cls_score_mavg[y.item()][n] += self.grad_ema_ratio * (self.grad_criterion[y.item()][n] - self.grad_cls_score_mavg[y.item()][n])
+       
+        for cls, dic in enumerate(self.grad_criterion):
+            self.writer.add_scalars("grad_criterion"+str(cls), dic, sample_num)
+
+        # just avg_mean score
+        label_count = torch.zeros(len(self.exposed_classes)).to(self.device)
+        total_label_count = len(labels)
+        for label in labels:
+            label_count[label.item()] += 1
+        label_ratio = label_count / total_label_count
+
+        ### current scoring 방식 ### 
+        self.grad_score_per_layer = {layer: torch.sum(torch.Tensor([self.grad_criterion[klass][layer] for klass in range(len(self.exposed_classes))]).to(self.device) * label_ratio).item() for layer in list(self.grad_criterion[0].keys())}
+        self.writer.add_scalars("layer_score", self.grad_score_per_layer, sample_num)
+
+
+    def calculate_covariance(self):
+        last_key = list(self.grad_dict[0].keys())[-1]
+        tensor_list = []
+        for cls in range(len(self.exposed_classes)):
+            tensor_list.append(torch.mean(torch.stack(self.grad_dict[cls][last_key]), dim=0))
+        tensor_list = torch.stack(tensor_list)
+        corr_coeff = torch.corrcoef(tensor_list)
+        # print(corr_coeff)
+
     def get_layer_number(self, n):
         name = n.split('.')
         if name[0] == 'initial':
@@ -599,7 +649,7 @@ class Ours(CLManagerBase):
             block_num = int(name[2][-1])
             return group_num * 2 + block_num - 1
 
-    @torch.no_grad()
+    # Hyunseo : Information based freeezing
     def calculate_fisher(self):
         group_fisher = [0.0 for _ in range(self.num_blocks)]
         for n, p in list(self.model.named_parameters())[:-2]:
@@ -657,13 +707,12 @@ class Ours(CLManagerBase):
 
 
 class OurMemory(MemoryBase):
-    def __init__(self, memory_size, T, count_decay_ratio, k_coeff, device):
+    def __init__(self, memory_size, T, count_decay_ratio, k_coeff):
         super().__init__(memory_size)
         self.T = T
         self.k_coeff = k_coeff
         self.entered_time = []
         self.count_decay_ratio = count_decay_ratio
-        self.device = device
 
     def replace_sample(self, sample, sample_num, idx=None):
         super().replace_sample(sample, idx)
@@ -689,15 +738,7 @@ class OurMemory(MemoryBase):
             self.count_decay_ratio = size / (len(self.images)*self.k_coeff)  #(self.k_coeff / (len(self.images)*self.count_decay_ratio))
             # print("count_decay_ratio", self.count_decay_ratio)
             self.usage_count *= (1-self.count_decay_ratio)
-            self.class_usage_count *= (1-self.count_decay_ratio)
         
-        similarity_matrix = {}
-        for i in range(len(self.cls_list)):
-            similarity_matrix[i] = {}
-            for j in range(len(self.cls_list)):
-                if i<=j:
-                    similarity_matrix[i][j] = 0.5
-
         if similarity_matrix is None:
             return self.balanced_retrieval(size)
         else:
@@ -712,16 +753,12 @@ class OurMemory(MemoryBase):
         
     def get_similarity_weight(self, sim_dict):
         n_cls = len(self.cls_list)
-        '''
         cls_cnt_sum = torch.zeros(n_cls)
         for i, cnt in enumerate(self.usage_count):
             cls_cnt_sum[self.labels[i]] += cnt
-        '''
-        cls_cnt_sum = torch.Tensor(self.class_usage_count)
-        #print('\n\n')
-        #print("cls_cnt_sum:", cls_cnt_sum.numpy().round(4))
-        #print("cls_cnt_avg:", (cls_cnt_sum/torch.Tensor([len(self.cls_idx[i]) for i in range(n_cls)])).numpy().round(4))
-
+        # print('\n\n')
+        # print("cls_cnt_sum:", cls_cnt_sum.numpy().round(4))
+        # print("cls_cnt_avg:", (cls_cnt_sum/torch.Tensor([len(self.cls_idx[i]) for i in range(n_cls)])).numpy().round(4))
         sim_matrix = torch.zeros((n_cls, n_cls))
         self_score = torch.ones(n_cls)
         for i in range(n_cls):
@@ -730,29 +767,28 @@ class OurMemory(MemoryBase):
                 sim_matrix[j][i] = sim_dict[i][j]
                 if i == j:
                     self_score -= sim_dict[i][i]
-        #print("sim_matrix:\n", sim_matrix.numpy().round(4))
+        # print("sim_matrix:\n", sim_matrix.numpy().round(4))
 
-        #self.total_flops += (len(cls_cnt_sum) * 2 * len(sim_matrix)) / 10e9
-        #self.total_flops += (sim_matrix.shape[0] * sim_matrix.shape[1]) / 10e9
         cls_score_sum = (sim_matrix * cls_cnt_sum).sum(dim=1)
-        #print("cls_score_sum:", cls_score_sum.numpy().round(4))
+        # print("cls_score_sum:", cls_score_sum.numpy().round(4))
 
         sample_score = cls_score_sum[torch.LongTensor(self.labels)] + torch.Tensor(self.usage_count)*self_score[torch.LongTensor(self.labels)]
 
         sample_score /= len(self.images)
-        #print("sample_score mean, std:", sample_score.mean().item(), sample_score.std().item())
+        # print("sample_score mean, std:", sample_score.mean().item(), sample_score.std().item())
         cls_score_sum = torch.zeros(n_cls)
         for i in range(len(self.images)):
             cls_score_sum[self.labels[i]] += sample_score[i]
-        #print("cls_score sum, mean:", cls_score_sum.numpy().round(4), (cls_score_sum/torch.Tensor(self.cls_count)).numpy().round(4))
+        # print("cls_score sum, mean:", cls_score_sum.numpy().round(4), (cls_score_sum/torch.Tensor(self.cls_count)).numpy().round(4))
 
         prob = F.softmax(torch.Tensor(-sample_score/self.T), dim=0)
 
         cls_prob_sum = torch.zeros(n_cls)
         for i in range(len(self.images)):
             cls_prob_sum[self.labels[i]] += prob[i]
-        #print("prob sum, mean:", cls_prob_sum.numpy().round(4), (cls_prob_sum / torch.Tensor(self.cls_count)).numpy().round(4))
-        #print('\n\n')
+        # print("prob sum, mean:", cls_prob_sum.numpy().round(4), (cls_prob_sum / torch.Tensor(self.cls_count)).numpy().round(4))
+        # print('\n\n')
 
         return prob.numpy()
+    
     
