@@ -57,7 +57,7 @@ class EWCpp(ER):
 
     def online_step(self, sample, sample_num, n_worker):
         super().online_step(sample, sample_num, n_worker)
-        if sample_num//self.samples_per_task == 0:
+        if sample_num % self.samples_per_task == 0:
             self.online_after_task(sample_num)
 
     def regularization_loss(
