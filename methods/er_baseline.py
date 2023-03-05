@@ -247,7 +247,7 @@ class ER:
         if len(self.temp_batch) == self.temp_batchsize:
             iteration = int(self.num_updates)
             if iteration != 0:
-                train_loss, train_acc = self.online_train(self.temp_batch, self.batch_size, n_worker, sample_num,
+                train_loss, train_acc = self.online_train(self.temp_batch, self.batch_size, n_worker,
                                                       iterations=int(self.num_updates), stream_batch_size=self.temp_batchsize)
                 self.report_training(sample_num, train_loss, train_acc)
                 

@@ -86,7 +86,7 @@ class EWCpp(ER):
             reg_loss = self.reg_coef * reg_loss
 
         return reg_loss
-
+    
     def online_train(self, sample, batch_size, n_worker, iterations=1, stream_batch_size=1):
         self.model.train()
         total_loss, correct, num_data = 0.0, 0.0, 0.0
