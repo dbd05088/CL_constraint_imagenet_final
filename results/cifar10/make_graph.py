@@ -3,8 +3,9 @@ import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import matplotlib.ticker as ticker
 import matplotlib as mpl
-import os
 from scipy.ndimage.filters import gaussian_filter1d
+import os
+
 mpl.rcParams.update({
     'font.size'           : 10.0        ,
     'font.sans-serif'     : 'Arial'    ,
@@ -40,6 +41,7 @@ def plot_from_result(ax, exp_name, label, lw=1.0, alpha=1.0, seeds=(1, 2, 3), sm
     for i in seeds:
         seed_data.append(np.load(exp_name + f'/seed_{i}_eval.npy'))
     data = sum(seed_data) / len(seed_data)
+
     data_time = np.load(exp_name + f'/seed_{seeds[0]}_eval_time.npy')
     dup = []
     for i in range(len(data)-1):
@@ -50,6 +52,7 @@ def plot_from_result(ax, exp_name, label, lw=1.0, alpha=1.0, seeds=(1, 2, 3), sm
     if smooth:
         data = gaussian_filter1d(data, sigma=2)
     ax.plot(data_time, data, label=label, lw=lw, alpha=alpha, zorder=zorder)
+
 def plot_loss_decrease(ax, exp_name, label, lw=1.0, alpha=1.0, seeds=(1,), smooth=False, zorder=1, train=True):
     seed_data = []
     for i in seeds:
@@ -61,6 +64,7 @@ def plot_loss_decrease(ax, exp_name, label, lw=1.0, alpha=1.0, seeds=(1,), smoot
             timename = f'/seed_{i}_bn_eval_time.npy'
         seed_data.append(np.load(exp_name + filename))
     data = sum(seed_data) / len(seed_data)
+
     data_time = np.load(exp_name + timename)
     if 'only' in exp_name:
         data = data[:2:]
@@ -84,6 +88,7 @@ def plot_forgetting(ax, exp_name, label, type, lw=1.0, alpha=1.0, seeds=(1, 2, 3
     if smooth:
         data = gaussian_filter1d(data, sigma=2)
     ax.plot(data_time, data, label=label, lw=lw, alpha=alpha, zorder=zorder)
+
 def plot_from_log(ax, exp_name, label, lw=1.0, alpha=1.0, seeds=(1, 2, 3), smooth=False, zorder=1):
     # smooth=False
     all_data = []
@@ -122,6 +127,7 @@ def plot_from_log(ax, exp_name, label, lw=1.0, alpha=1.0, seeds=(1, 2, 3), smoot
     # label += f'(A_auc: {np.mean(A_auc):.4f}/{np.std(A_auc):.4f} | A_last: {np.mean(A_last):.4f}/{np.std(A_last):.4f} | A_online: {np.mean(A_online):.4f}/{np.std(A_online):.4f})'
     ax.plot(data_time, data, label=label, lw=lw, alpha=alpha, zorder=zorder)
 
+
 def plot_flops_from_log(ax, exp_name, label, lw=1.0, alpha=1.0, seeds=(1, 2, 3), smooth=False, zorder=1):
     all_data = []
     all_time = []
@@ -148,24 +154,32 @@ def plot_flops_from_log(ax, exp_name, label, lw=1.0, alpha=1.0, seeds=(1, 2, 3),
         data = gaussian_filter1d(data, sigma=2)
     data_time = all_time[0][:length]
     ax.plot(data_time, data, label=label, lw=lw, alpha=alpha, zorder=zorder)
+
 def plot_acc_and_flops(ax1, ax2, exp_name, label, seeds=(1,), zorder=1):
     plot_from_log(ax1, exp_name, label, 1, 1, seeds=seeds, smooth=True, zorder=zorder)
     plot_flops_from_log(ax2, exp_name, label, 1, 1, seeds=seeds, smooth=False, zorder=zorder)
 width = 4.5
 height = width * 0.9
+
+
 fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(width, height), sharex=True)
 
 exp_list = os.listdir()
 for exp in exp_list:
     if exp != 'make_graph.py' and ".pdf" not in exp:
-        k_value = exp.split('_')[5]
-        t_value = exp.split('_')[5]
-        if k_value == "k8":
+        k_value = exp.split('_')[-6]
+        t_value = exp.split('_')[-6]
+        if k_value == "2":
             print(exp)
             plot_acc_and_flops(ax1, ax2, exp, exp)
+
+#plot_acc_and_flops(ax1, ax2, 'test', 'ours_full')
+
+
 # plot_from_log(ax1, 'corr_relu_layer_10_4_100', 'corr_layer', 1, 1, seeds=(1, 2, 3), smooth=True)
 # plot_from_log(ax1, 'corr_with_relu_10_4_100', 'corr', 1, 1, seeds=(1, 2, 3), smooth=True)
 # plot_from_log(ax1, 'ours_distill_10_4_100', 'normal', 1, 1, seeds=(1, 2, 3), smooth=True)
+
 # plot_forgetting(ax1, 'ours_distill_10_4_100', 'Forgetting', 'forgetting', 1, 1, seeds=(1,), smooth=True)
 # plot_forgetting(ax1, 'ours_distill_10_4_100', 'Knowledge Gain', 'knowledge_gain', 1, 1, seeds=(1,), smooth=True)
 # plot_forgetting(ax1, 'ours_distill_10_4_100', 'Retained Knowledge', 'retained_knowledge', 1, 1, seeds=(1,), smooth=True)
@@ -179,9 +193,12 @@ for exp in exp_list:
 # plot_flops_from_log(ax2, 'test_batchstat_modified', 'ours_1', 1, 1, seeds=(1,), smooth=True, zorder=1)
 # plot_flops_from_log(ax2, 'nofreeze', 'nofreeze', 1, 1, seeds=(1,), smooth=True)
 # plot_flops_from_log(ax2, 'our_1.3', 'ours_1.3', 1, 1, seeds=(1,), smooth=True, zorder=1)
+
+
 # plot_from_log(ax1, 'ours_1.0_uf0.05', 'ours_0.05', 1, 1, seeds=(1, ), smooth=True, zorder=3)
 # plot_from_log(ax1, 'ours_1.0_uf0.1', 'ours_0.1', 1, 1, seeds=(1, ), smooth=True, zorder=3)
 # ax2.plot(np.arange(0, 50000), np.arange(0, 50000)*110/50000, c='k', ls='--', lw=0.5)
+
 # plot_from_log(ax1, '_prev_220822/ours_distill_10_4_100', 'distill', 1, 1, seeds=(1,), smooth=True)
 # plot_from_log(ax1, '_prev_220822/baseline_10_4_100', 'base', 1, 1, seeds=(1,), smooth=True)
 # plot_from_log(ax1, 'test', 'test', 1, 1, seeds=(1,), smooth=True)
@@ -211,6 +228,7 @@ for exp in exp_list:
 # plot_from_log(ax1, 'der_10_4_100_none', 'Ours', 1, 1, seeds=(1,), smooth=True)
 # plot_from_log(ax1, 'er_10_4_100_autoaug', 'Ours', 1, 1, seeds=(1,), smooth=True)
 # plot_from_log(ax1, 'der_10_4_100_autoaug', 'Ours', 1, 1, seeds=(1,), smooth=True)
+
 # plot_from_log(ax1, 'ours_1r_sample_fc_none', 'base', 1, 1, seeds=(1,), smooth=True)
 # plot_from_log(ax1, 'ours_1r_batch_fc_none', 'Ours', 1, 1, seeds=(1,), smooth=True)
 # plot_from_log(ax1, 'ours_1r_cumul_fc_train', 'Ours', 1, 1, seeds=(1,), smooth=True)
@@ -218,14 +236,19 @@ for exp in exp_list:
 # plot_from_log(ax1, "ours_1r_linear_05_125", 'Ours_lin', 1, 1, seeds=(1,), smooth=True)
 # plot_from_log(ax1, "ours_1r_linear_05_125_", 'Ours_lin', 1, 1, seeds=(1,), smooth=True)
 # plot_from_log(ax1, 'ours_1r_10_lr', 'Ours', 1, 1, seeds=(1, 2, 3), smooth=True)
+
 # plot_from_log(ax1, 'ours_inc', 'clspred2', 1, 1, seeds=(1, 2, 3), smooth=True)
 # plot_from_log(ax1, 'pma_model_distill_9999_99976_eval', 'period_distill', 1, 1, seeds=(1,), smooth=True)
 # plot_from_log(ax1, 'pma_first_period_distil', 'period_distill', 1, 1, seeds=(1,), smooth=True)
 # plot_from_log(ax1, 'pma_model_distill_999_99', 'dma_distill', 1, 1, seeds=(1,), smooth=True)
 # plot_from_log(ax1, 'norm_pred_based', 'norm_distill', 1, 1, seeds=(1,), smooth=True)
+
 # plot_from_log(ax1, '../../temp 100/baseline_10_4_100', 'Baseline', 1, 1, seeds=(1, 2, 3), smooth=True)
 # plot_from_log(ax1, '../../temp 100/clib_10_4_100', 'CLIB', 1, 1, seeds=(1, 2, 3), smooth=True)
+
 # plot_from_log(ax1, '../../temp 100/ours_100', 'Ours', 1, 1, seeds=(1, 2, 3), smooth=True)
+
+
 # plot_from_result(ax1, 'bntest_4r_random100', 'train', 1, 1, seeds=(1, 2, 3), smooth=True)
 # plot_from_result(ax1, 'bntest_4r_random0', 'eval', 1, 1, seeds=(1, 2, 3), smooth=True)
 # plot_from_result(ax1, 'bntest_4r_random50', 'random', 1, 1, seeds=(1, 2, 3), smooth=True)
@@ -235,6 +258,8 @@ for exp in exp_list:
 # plot_from_log(ax1, 'sbp_no_bpcut_train', 'none', 1, 1, seeds=(1, 2, 3), smooth=True)
 # plot_from_log(ax1, 'corr_importance_rbp', 'corr_rbp', 1, 1, seeds=(1, 2, 3), smooth=True, zorder=6)
 # plot_from_result(ax1, 'baseline', 'nd', 1, 1, seeds=(1, 2, 3), smooth=True)
+
+
 # plot_from_log(ax1, 'modeldis_b1_e999_w', 'B1_W', 1, 1, seeds=(1,), smooth=True)
 # plot_from_log(ax1, 'modeldistill_predbased_50_00', 'B1_P_50_00', 1, 1, seeds=(1,), smooth=True)
 # plot_from_log(ax1, 'modeldistill_predbased_50_25', 'B1_P_50_25', 1, 1, seeds=(1,), smooth=True)
@@ -276,18 +301,19 @@ for exp in exp_list:
 # plot_from_log(ax1, 'cwd_10_1b', 'B10_fc', 1, 1, seeds=(1,), smooth=True)
 # plot_from_result(ax1, 'outdated/feat_distill_10_1', 'FeatureDistill', 1, 1, seeds=(1,), smooth=True)
 
-#plot_from_log(ax1, 'ours_real_diagonal_removed_cifar10_k2_t0.0625', 'k2_t0.0625', 1, 1, seeds=(1,), smooth=True)
-
 plt.xlabel('# samples')
+
 # ax.grid()
 # ax.set_ylabel('Accuracy')
 # ax.set_xlim(0, 50000)
 # ax.legend()
+
 ax1.set_ylabel('Accuracy')
 ax1.set_xlim(0, 50100)
 ax2.set_ylabel('TFLOPs')
 ax1.set_ylim(0, 1)
 ax1.legend(facecolor=(0.97, 0.97, 0.97), fontsize=8)
+
 ax1.grid()
 ax2.grid()
 ax1.set_axisbelow(True)
@@ -296,5 +322,8 @@ ax2.set_axisbelow(True)
 # ax2.set_xlim(0, 50000)
 ax2.set_ylim(0, 140)
 # ax2.legend()
+
 plt.tight_layout()
-plt.savefig('k8_result.pdf')
+plt.savefig('k2_result.pdf')
+
+
