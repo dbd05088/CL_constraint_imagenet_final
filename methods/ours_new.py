@@ -380,11 +380,22 @@ class Ours(CLManagerBase):
                     self.freeze_layers()
 
             _, preds = logit.topk(self.topk, 1, True, True)
-            
-            loss.backward()
-            autograd_hacks.compute_grad1(self.model)
-            
-            self.optimizer.step()
+
+
+            if self.use_amp:
+                self.scaler.scale(loss).backward()
+                autograd_hacks.compute_grad1(self.model)
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+            else:
+                loss.backward()
+                autograd_hacks.compute_grad1(self.model)
+                self.optimizer.step()
+
+            # loss.backward()
+            # autograd_hacks.compute_grad1(self.model)
+            #
+            # self.optimizer.step()
             #self.update_gradstat(self.sample_num, y)
             
             if self.sample_num >= 2:
@@ -478,9 +489,9 @@ class Ours(CLManagerBase):
             self.memory.replace_sample(sample, sample_num, idx_to_replace)
         else:
             self.memory.replace_sample(sample, sample_num)
-    
+
+    @torch.no_grad()
     def update_correlation(self, labels):
-        
         current_corr_map = copy.deepcopy(self.corr_map)
         curr_corr_key_list = list(current_corr_map.keys())
         for key_i in curr_corr_key_list:
@@ -649,7 +660,7 @@ class Ours(CLManagerBase):
             block_num = int(name[2][-1])
             return group_num * 2 + block_num - 1
 
-    # Hyunseo : Information based freeezing
+    @torch.no_grad()
     def calculate_fisher(self):
         group_fisher = [0.0 for _ in range(self.num_blocks)]
         for n, p in list(self.model.named_parameters())[:-2]:
@@ -673,6 +684,7 @@ class Ours(CLManagerBase):
         self.cumulative_backward_flops = [sum(self.comp_backward_flops[0:i+1]) for i in range(9)]
         self.total_model_flops = self.forward_flops + self.backward_flops
 
+    @torch.no_grad()
     def get_freeze_idx(self, logit, label):
         grad = self.get_grad(logit, label, self.model.fc.weight)
         last_grad = (grad ** 2 ).sum().item()
@@ -694,6 +706,7 @@ class Ours(CLManagerBase):
         # print(modified_score, optimal_freeze)
         self.freeze_idx = list(range(9))[0:optimal_freeze]
 
+    @torch.no_grad()
     def get_grad(self, logit, label, weight):
         prob = F.softmax(logit)
         oh_label = F.one_hot(label.long(), self.num_learned_class)
@@ -786,7 +799,7 @@ class OurMemory(MemoryBase):
         cls_prob_sum = torch.zeros(n_cls)
         for i in range(len(self.images)):
             cls_prob_sum[self.labels[i]] += prob[i]
-        # print("prob sum, mean:", cls_prob_sum.numpy().round(4), (cls_prob_sum / torch.Tensor(self.cls_count)).numpy().round(4))
+        print("prob sum, mean:", cls_prob_sum.numpy().round(4), (cls_prob_sum / torch.Tensor(self.cls_count)).numpy().round(4))
         # print('\n\n')
 
         return prob.numpy()
