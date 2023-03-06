@@ -608,7 +608,7 @@ class MemoryBase:
         self.cls_list.append(class_name)
         self.cls_count.append(0)
         self.cls_idx.append([])
-        self.class_usage_count = np.append(self.class_usage_count, 0)
+        self.class_usage_count = np.append(self.class_usage_count, 0.0)
 
     def retrieval(self, size):
         sample_size = min(size, len(self.images))

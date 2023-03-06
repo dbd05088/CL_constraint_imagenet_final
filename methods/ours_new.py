@@ -133,7 +133,7 @@ class Ours(CLManagerBase):
     def initialize_future(self):
         self.data_stream = iter(self.train_datalist)
         self.dataloader = MultiProcessLoader(self.n_worker, self.cls_dict, self.train_transform, self.data_dir, self.transform_on_gpu, self.cpu_transform, self.device, self.use_kornia, self.transform_on_worker)
-        self.memory = OurMemory(self.memory_size, self.T, self.count_decay_ratio, self.k_coeff)
+        self.memory = OurMemory(self.memory_size, self.T, self.count_decay_ratio, self.k_coeff, self.device)
 
         self.grad_score_per_layer = None
 
@@ -193,7 +193,7 @@ class Ours(CLManagerBase):
 
         if  self.future_num_updates >= 1:
             if self.future_sample_num >= self.corr_warm_up:
-                self.generate_waiting_batch(int(self.future_num_updates), self.sim_matrix.cpu())
+                self.generate_waiting_batch(int(self.future_num_updates), self.sim_matrix)
             else:
                 self.generate_waiting_batch(int(self.future_num_updates))
             self.future_num_updates -= int(self.future_num_updates)
@@ -511,15 +511,11 @@ class Ours(CLManagerBase):
     def update_correlation(self, labels):
         current_corr_map = copy.deepcopy(self.corr_map)
         curr_corr_key_list = list(current_corr_map.keys())
-        for key_i in curr_corr_key_list:
-            for key_j in curr_corr_key_list:
-                current_corr_map[key_i][key_j] = []
 
-        labels = labels.detach().clone()
-        n_classes = self.sim_matrix.size(0)
-        batch_size = len(labels)
-        update_matrix = torch.zeros_like(self.sim_matrix).flatten()
-        labelcount_matrix = torch.zeros_like(self.sim_matrix).flatten()
+        # n_classes = self.sim_matrix.size(0)
+        # batch_size = len(labels)
+        # update_matrix = torch.zeros_like(self.sim_matrix).flatten()
+        # labelcount_matrix = torch.zeros_like(self.sim_matrix).flatten()
         selected_grads = []
         for n, p in self.model.named_parameters():
             if p.requires_grad is True and p.grad is not None and n in self.selected_mask.keys():
@@ -528,18 +524,38 @@ class Ours(CLManagerBase):
         similarity_matrix = F.cosine_similarity(stacked_grads.unsqueeze(1), stacked_grads.unsqueeze(0), dim=2)
         self.total_flops += stacked_grads.shape[0]*stacked_grads.shape[0]*2*stacked_grads.shape[1]/10e9
 
-        count_matrix = torch.ones_like(similarity_matrix).fill_diagonal_(0.0).flatten()
-        index_matrix = (labels.unsqueeze(1)*n_classes + labels.unsqueeze(0)).flatten()
-        similarity_matrix = similarity_matrix.fill_diagonal_(0.0).flatten()
+        unique_labels, idxs = torch.unique(labels, sorted=True, return_inverse=True)
 
-        update_matrix = update_matrix.scatter_add(0, index_matrix, similarity_matrix)
-        labelcount_matrix = labelcount_matrix.scatter_add(0, index_matrix, count_matrix)
-        update_matrix = update_matrix.view(self.sim_matrix.shape)
-        labelcount_matrix = labelcount_matrix.view(self.sim_matrix.shape)
-        update_mask = labelcount_matrix > 0
-        update_matrix[update_mask] /= labelcount_matrix[update_mask]
-        self.sim_matrix[update_mask] += self.grad_ema_ratio * (update_matrix[update_mask] - self.sim_matrix[update_mask])
+        for i, label1 in enumerate(unique_labels):
+            for j, label2 in enumerate(unique_labels[i:]):
+                if label1 == label2:
+                    num_elements = (idxs == i).sum()
+                    if num_elements > 1:
+                        label_matrix = similarity_matrix[idxs == i][:, idxs == i+j]
+                        non_overlap_idx = torch.triu_indices(num_elements, num_elements, 1)
+                        self.sim_matrix[label1][label2] += self.grad_ema_ratio * (
+                                    (label_matrix[non_overlap_idx[0], non_overlap_idx[1]]).mean() - self.sim_matrix[label1][label2])
+                else:
+                    self.sim_matrix[label1][label2] += self.grad_ema_ratio *(
+                            (similarity_matrix[idxs == i][:, idxs == i+j]).mean() - self.sim_matrix[label1][label2])
+
+        n = self.sim_matrix.size(0)
+        i1, j1 = torch.triu_indices(n, n, 1)
+        self.sim_matrix[j1, i1] = self.sim_matrix[i1, j1]
+
         # print(self.sim_matrix)
+        # count_matrix = torch.ones_like(similarity_matrix).fill_diagonal_(0.0).flatten()
+        # index_matrix = (labels.unsqueeze(1)*n_classes + labels.unsqueeze(0)).flatten()
+        # similarity_matrix = similarity_matrix.fill_diagonal_(0.0).flatten()
+        #
+        # update_matrix = update_matrix.scatter_add(0, index_matrix, similarity_matrix)
+        # labelcount_matrix = labelcount_matrix.scatter_add(0, index_matrix, count_matrix)
+        # update_matrix = update_matrix.view(self.sim_matrix.shape)
+        # labelcount_matrix = labelcount_matrix.view(self.sim_matrix.shape)
+        # update_mask = labelcount_matrix > 0
+        # update_matrix[update_mask] /= labelcount_matrix[update_mask]
+        # self.sim_matrix[update_mask] += self.grad_ema_ratio * (update_matrix[update_mask] - self.sim_matrix[update_mask])
+        # # print(self.sim_matrix)
 
         # for i in range(len(labels)):
         #     for j in range(i+1, len(labels)):
@@ -714,18 +730,28 @@ class Ours(CLManagerBase):
 
 
 class OurMemory(MemoryBase):
-    def __init__(self, memory_size, T, count_decay_ratio, k_coeff):
+    def __init__(self, memory_size, T, count_decay_ratio, k_coeff, device='cpu'):
         super().__init__(memory_size)
         self.T = T
         self.k_coeff = k_coeff
         self.entered_time = []
         self.count_decay_ratio = count_decay_ratio
+        self.device = device
+        self.usage_count = torch.Tensor([]).to(self.device)
+        self.class_usage_count = torch.Tensor([]).to(self.device)
 
     def replace_sample(self, sample, sample_num, idx=None):
         super().replace_sample(sample, idx)
-        self.usage_count = np.append(self.usage_count, 0)
+        self.usage_count = torch.cat([self.usage_count, torch.zeros(1).to(self.device)])
         self.entered_time.append(sample_num)
-    
+
+    def add_new_class(self, class_name):
+        self.cls_dict[class_name] = len(self.cls_list)
+        self.cls_list.append(class_name)
+        self.cls_count.append(0)
+        self.cls_idx.append([])
+        self.class_usage_count = torch.cat([self.class_usage_count, torch.zeros(1).to(self.device)])
+
     # balanced probability retrieval
     def balanced_retrieval(self, size):
         sample_size = min(size, len(self.images))
@@ -734,8 +760,8 @@ class OurMemory(MemoryBase):
         for cls in cls_idx:
             i = np.random.choice(self.cls_idx[cls], 1)[0]
             memory_batch.append(self.images[i])
-            self.usage_count[i]+=1
-            self.class_usage_count[self.labels[i]]+=1
+            self.usage_count[i] += 1
+            self.class_usage_count[self.labels[i]] += 1
         return memory_batch
 
     
@@ -745,6 +771,7 @@ class OurMemory(MemoryBase):
             self.count_decay_ratio = size / (len(self.images)*self.k_coeff)  #(self.k_coeff / (len(self.images)*self.count_decay_ratio))
             # print("count_decay_ratio", self.count_decay_ratio)
             self.usage_count *= (1-self.count_decay_ratio)
+            self.class_usage_count *= (1-self.count_decay_ratio)
         
         if similarity_matrix is None:
             return self.balanced_retrieval(size)
@@ -754,20 +781,20 @@ class OurMemory(MemoryBase):
             sample_idx = np.random.choice(len(self.images), sample_size, p=weight, replace=False)
             memory_batch = list(np.array(self.images)[sample_idx])
             for i in sample_idx:
-                self.usage_count[i]+=1
-                self.class_usage_count[self.labels[i]]+=1    
+                self.usage_count[i] += 1
+                self.class_usage_count[self.labels[i]] += 1
             return memory_batch
         
     def get_similarity_weight(self, sim_matrix):
         n_cls = len(self.cls_list)
-        cls_cnt_sum = torch.zeros(n_cls)
-        for i, cnt in enumerate(self.usage_count):
-            cls_cnt_sum[self.labels[i]] += cnt
+        # cls_cnt_sum = torch.zeros(n_cls)
+        # for i, cnt in enumerate(self.usage_count):
+        #     cls_cnt_sum[self.labels[i]] += cnt
         # print('\n\n')
         # print("cls_cnt_sum:", cls_cnt_sum.numpy().round(4))
         # print("cls_cnt_avg:", (cls_cnt_sum/torch.Tensor([len(self.cls_idx[i]) for i in range(n_cls)])).numpy().round(4))
         # sim_matrix = torch.zeros((n_cls, n_cls))
-        self_score = torch.ones(n_cls)
+        self_score = torch.ones(n_cls).to(self.device)
         self_score -= sim_matrix.diag()
         #     for j in range(i, n_cls):
         #         sim_matrix[i][j] = sim_dict[i][j]
@@ -776,10 +803,10 @@ class OurMemory(MemoryBase):
         #             self_score -= sim_dict[i][i]
         # print("sim_matrix:\n", sim_matrix.numpy().round(4))
 
-        cls_score_sum = (sim_matrix * cls_cnt_sum).sum(dim=1)
+        cls_score_sum = (sim_matrix * self.class_usage_count).sum(dim=1)
         # print("cls_score_sum:", cls_score_sum.numpy().round(4))
 
-        sample_score = cls_score_sum[torch.LongTensor(self.labels)] + torch.Tensor(self.usage_count)*self_score[torch.LongTensor(self.labels)]
+        sample_score = cls_score_sum[torch.LongTensor(self.labels).to(self.device)] + torch.Tensor(self.usage_count).to(self.device)*self_score[torch.LongTensor(self.labels).to(self.device)]
 
         sample_score /= len(self.images)
         # print("sample_score mean, std:", sample_score.mean().item(), sample_score.std().item())
@@ -788,7 +815,7 @@ class OurMemory(MemoryBase):
         #     cls_score_sum[self.labels[i]] += sample_score[i]
         # print("cls_score sum, mean:", cls_score_sum.numpy().round(4), (cls_score_sum/torch.Tensor(self.cls_count)).numpy().round(4))
 
-        prob = F.softmax(torch.Tensor(-sample_score/self.T), dim=0)
+        prob = F.softmax(-sample_score/self.T, dim=0)
 
         # cls_prob_sum = torch.zeros(n_cls)
         # for i in range(len(self.images)):
@@ -796,6 +823,6 @@ class OurMemory(MemoryBase):
         # print("prob sum, mean:", cls_prob_sum.numpy().round(4), (cls_prob_sum / torch.Tensor(self.cls_count)).numpy().round(4))
         # print('\n\n')
 
-        return prob.numpy()
+        return prob.cpu().numpy()
     
     
