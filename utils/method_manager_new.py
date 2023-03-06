@@ -6,6 +6,7 @@ from methods.sdp_new import SDP
 from methods.der_new import DER
 from methods.ewc_new import EWCpp
 from methods.ours_new import Ours
+from methods.mir_new import MIR
 from methods.aser_new import ASER
 logger = logging.getLogger()
 
@@ -14,6 +15,13 @@ def select_method(args, train_datalist, test_datalist, device):
     kwargs = vars(args)
     if args.mode == "er":
         method = ER(
+            train_datalist=train_datalist,
+            test_datalist=test_datalist,
+            device=device,
+            **kwargs,
+        )
+    elif args.mode == "mir":
+        method = MIR(
             train_datalist=train_datalist,
             test_datalist=test_datalist,
             device=device,

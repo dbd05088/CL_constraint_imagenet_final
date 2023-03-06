@@ -139,8 +139,8 @@ class MIR(ER):
 
                 mem_x_cands = data["image"][self.temp_batch_size:]
                 mem_y_cands = data["label"][self.temp_batch_size:]
-                mem_x = mem_x_cands[selected_samples]
-                mem_y = mem_y_cands[selected_samples]
+                mem_x = mem_x_cands[selected_samples.cpu()]
+                mem_y = mem_y_cands[selected_samples.cpu()]
                 
                 '''
                 mem_indices = memory_cands['index'][selected_samples]
