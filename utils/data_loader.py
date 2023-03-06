@@ -81,13 +81,16 @@ class MultiProcessLoader():
             if loaded_samples is not None:
                 images.append(loaded_samples["image"])
                 labels.append(loaded_samples["label"])
-        images = torch.cat(images)
-        labels = torch.cat(labels)
-        if self.transform_on_gpu and not self.transform_on_worker:
-            images = self.transform(images.to(self.device))
-        data['image'] = images
-        data['label'] = labels
-        return data
+        if len(images) > 0:
+            images = torch.cat(images)
+            labels = torch.cat(labels)
+            if self.transform_on_gpu and not self.transform_on_worker:
+                images = self.transform(images.to(self.device))
+            data['image'] = images
+            data['label'] = labels
+            return data
+        else:
+            return None
     
 
 def nonzero_indices(bool_mask_tensor):
