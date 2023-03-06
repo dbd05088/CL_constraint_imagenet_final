@@ -136,6 +136,7 @@ class EWCpp(ER):
 
         return total_loss / iterations, correct / num_data
 
+    @torch.no_grad()
     def online_after_task(self, cur_iter):
         # 2.Backup the weight of current task
         task_param = {}
@@ -163,13 +164,15 @@ class EWCpp(ER):
             }
         logger.debug(f"# of reg_terms: {len(self.regularization_terms)}")
 
+    @torch.no_grad()
     def update_fisher_and_score(self, new_params, old_params, new_grads, old_grads, epsilon=0.001):
         for n, _ in self.parameters.items():
             if n in old_grads:
-                new_p = new_params[n]
-                old_p = old_params[n]
+                #new_p = new_params[n]
+                #old_p = old_params[n]
                 new_grad = new_grads[n]
                 old_grad = old_grads[n]
+                '''
                 if torch.isinf(new_p).sum()+torch.isinf(old_p).sum()+torch.isinf(new_grad).sum()+torch.isinf(old_grad).sum():
                     continue
                 if torch.isnan(new_p).sum()+torch.isnan(old_p).sum()+torch.isnan(new_grad).sum()+torch.isnan(old_grad).sum():
@@ -177,6 +180,7 @@ class EWCpp(ER):
                 self.epoch_score[n] += (old_grad-new_grad) * (new_p - old_p) / (
                     0.5 * self.epoch_fisher[n] * (new_p - old_p) ** 2 + epsilon
                 )
+                
                 if self.epoch_score[n].max() > 1000:
                     logger.debug(
                         "Too large score {} / {}".format(
@@ -184,6 +188,7 @@ class EWCpp(ER):
                             0.5 * self.epoch_fisher[n] * (new_p - old_p) ** 2 + epsilon,
                         )
                     )
+                '''
                 if (self.epoch_fisher[n] == 0).all():  # First time
                     self.epoch_fisher[n] = new_grad ** 2
                 else:
@@ -191,6 +196,7 @@ class EWCpp(ER):
                         n
                     ] + self.alpha * new_grad ** 2
 
+    @torch.no_grad()
     def calculate_importance(self):
         importance = {}
         self.fisher.append(self.epoch_fisher)
