@@ -8,8 +8,8 @@ K_COEFF="4"
 TEMPERATURE="0.125"
 
 TRANSFORM_ON_GPU="--transform_on_gpu"
-N_WORKER=4
-FUTURE_STEPS=3
+N_WORKER=6
+FUTURE_STEPS=4
 EVAL_N_WORKER=4
 EVAL_BATCH_SIZE=1000
 #USE_KORNIA="--use_kornia"
@@ -18,7 +18,7 @@ UNFREEZE_RATE=0.25
 SEEDS="1"
 
 
-DATASET="tinyimagenet" # cifar10, cifar100, tinyimagenet, imagenet
+DATASET="imagenet" # cifar10, cifar100, tinyimagenet, imagenet
 ONLINE_ITER=0.0183284375
 SIGMA=10
 REPEAT=1
@@ -60,12 +60,12 @@ fi
 
 for RND_SEED in $SEEDS
 do
-    CUDA_VISIBLE_DEVICES=0 nohup python main_new.py --mode $MODE \
+    CUDA_VISIBLE_DEVICES=2 nohup python main_new.py --mode $MODE \
     --dataset $DATASET --unfreeze_rate $UNFREEZE_RATE $USE_KORNIA --k_coeff $K_COEFF --temperature $TEMPERATURE \
     --sigma $SIGMA --repeat $REPEAT --init_cls $INIT_CLS --samples_per_task 20000 \
-    --rnd_seed $RND_SEED --val_memory_size $VAL_SIZE --data_dir ../imagenet/ \
+    --rnd_seed $RND_SEED --val_memory_size $VAL_SIZE --data_dir ../../jihun/data/imagenet/ \
     --model_name $MODEL_NAME --opt_name $OPT_NAME --sched_name $SCHED_NAME \
-    --lr $LR --batchsize $BATCHSIZE --mir_cands $MIR_CANDS \
+    --lr $LR --batchsize $BATCHSIZE --mir_cands $MIR_CANDS --f_period $F_PERIOD \
     --memory_size $MEM_SIZE $TRANSFORM_ON_GPU --online_iter $ONLINE_ITER \
     --note $NOTE --eval_period $EVAL_PERIOD --imp_update_period $IMP_UPDATE_PERIOD $USE_AMP --n_worker $N_WORKER --future_steps $FUTURE_STEPS --eval_n_worker $EVAL_N_WORKER --eval_batch_size $EVAL_BATCH_SIZE &
 done

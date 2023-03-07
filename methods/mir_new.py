@@ -52,6 +52,7 @@ class MIR(ER):
         if sample["klass"] not in self.memory.cls_list:
             self.memory.add_new_class(sample["klass"])
             self.dataloader.add_new_class(self.memory.cls_dict)
+            self.cand_loader.add_new_class(self.memory.cls_dict)
         self.temp_future_batch.append(sample)
         self.future_num_updates += self.online_iter
 
