@@ -260,19 +260,21 @@ class Ours(CLManagerBase):
 
 
     def future_add_new_class(self):
-        n = self.sim_matrix.size(0)
-        if n > 0:
-            prev_sim_matrix = copy.deepcopy(self.sim_matrix)
-            diagonal_avg = torch.diag(self.sim_matrix).mean()
-            if n > 1:
-                off_diagonal_avg = (torch.mean(self.sim_matrix) - diagonal_avg/n)*n/(n-1)
-            else:
-                off_diagonal_avg = 0
-            self.sim_matrix = torch.ones([n+1, n+1]).to(self.device)*off_diagonal_avg
-            self.sim_matrix[n, n] = diagonal_avg
-            self.sim_matrix[0:n, 0:n] = prev_sim_matrix
-        else:
-            self.sim_matrix = torch.zeros([1, 1]).to(self.device)
+        # n = self.sim_matrix.size(0)
+        # if n > 0:
+        #     prev_sim_matrix = copy.deepcopy(self.sim_matrix)
+        #     diagonal_avg = torch.diag(self.sim_matrix).mean()
+        #     if n > 1:
+        #         off_diagonal_avg = (torch.mean(self.sim_matrix) - diagonal_avg/n)*n/(n-1)
+        #     else:
+        #         off_diagonal_avg = 0
+        #     self.sim_matrix = torch.ones([n+1, n+1]).to(self.device)*off_diagonal_avg
+        #     self.sim_matrix[n, n] = diagonal_avg
+        #     self.sim_matrix[0:n, 0:n] = prev_sim_matrix
+        # else:
+        #     self.sim_matrix = torch.zeros([1, 1]).to(self.device)
+        self.sim_matrix = torch.ones([len(self.memory.cls_list), len(self.memory.cls_list)]).to(self.device)*self.other_cls_sim
+        self.sim_matrix.fill_diagonal_(self.self_cls_sim)
         ### for calculating similarity ###
         # len_key = len(self.corr_map.keys())
         # if len_key > 1:
@@ -417,6 +419,7 @@ class Ours(CLManagerBase):
             
             if self.sample_num >= 2:
                 self.update_correlation(y)
+            print(self.sim_matrix)
 
             if not self.frozen:
                 self.calculate_fisher()
@@ -525,19 +528,28 @@ class Ours(CLManagerBase):
         self.total_flops += stacked_grads.shape[0]*stacked_grads.shape[0]*2*stacked_grads.shape[1]/10e9
 
         unique_labels, idxs = torch.unique(labels, sorted=True, return_inverse=True)
-
-        for i, label1 in enumerate(unique_labels):
-            for j, label2 in enumerate(unique_labels[i:]):
-                if label1 == label2:
-                    num_elements = (idxs == i).sum()
-                    if num_elements > 1:
-                        label_matrix = similarity_matrix[idxs == i][:, idxs == i+j]
-                        non_overlap_idx = torch.triu_indices(num_elements, num_elements, 1)
-                        self.sim_matrix[label1][label2] += self.grad_ema_ratio * (
-                                    (label_matrix[non_overlap_idx[0], non_overlap_idx[1]]).mean() - self.sim_matrix[label1][label2])
-                else:
-                    self.sim_matrix[label1][label2] += self.grad_ema_ratio *(
-                            (similarity_matrix[idxs == i][:, idxs == i+j]).mean() - self.sim_matrix[label1][label2])
+        same_labels = labels.unsqueeze(1) == labels.unsqueeze(0)
+        diff_labels = ~same_labels
+        same_labels.fill_diagonal_(False)
+        if torch.any(same_labels):
+            self.self_cls_sim += self.grad_ema_ratio*(torch.mean(similarity_matrix[same_labels]) - self.self_cls_sim)
+        if torch.any(diff_labels):
+            self.other_cls_sim += self.grad_ema_ratio*(torch.mean(similarity_matrix[diff_labels]) - self.other_cls_sim)
+        self.sim_matrix = torch.ones([len(self.memory.cls_list), len(self.memory.cls_list)]).to(self.device)*self.other_cls_sim
+        self.sim_matrix.fill_diagonal_(self.self_cls_sim)
+        
+        # for i, label1 in enumerate(unique_labels):
+        #     for j, label2 in enumerate(unique_labels[i:]):
+        #         if label1 == label2:
+        #             num_elements = (idxs == i).sum()
+        #             if num_elements > 1:
+        #                 label_matrix = similarity_matrix[idxs == i][:, idxs == i+j]
+        #                 non_overlap_idx = torch.triu_indices(num_elements, num_elements, 1)
+        #                 self.sim_matrix[label1][label2] += self.grad_ema_ratio * (
+        #                             (label_matrix[non_overlap_idx[0], non_overlap_idx[1]]).mean() - self.sim_matrix[label1][label2])
+        #         else:
+        #             self.sim_matrix[label1][label2] += self.grad_ema_ratio *(
+        #                     (similarity_matrix[idxs == i][:, idxs == i+j]).mean() - self.sim_matrix[label1][label2])
 
         n = self.sim_matrix.size(0)
         i1, j1 = torch.triu_indices(n, n, 1)
@@ -806,7 +818,7 @@ class OurMemory(MemoryBase):
         cls_score_sum = (sim_matrix * self.class_usage_count).sum(dim=1)
         # print("cls_score_sum:", cls_score_sum.numpy().round(4))
 
-        sample_score = cls_score_sum[torch.LongTensor(self.labels).to(self.device)] + torch.Tensor(self.usage_count).to(self.device)*self_score[torch.LongTensor(self.labels).to(self.device)]
+        sample_score = cls_score_sum[torch.LongTensor(self.labels).to(self.device)] + self.usage_count.to(self.device)*self_score[torch.LongTensor(self.labels).to(self.device)]
 
         sample_score /= len(self.images)
         # print("sample_score mean, std:", sample_score.mean().item(), sample_score.std().item())
