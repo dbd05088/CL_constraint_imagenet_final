@@ -200,10 +200,11 @@ class CLManagerBase:
         self.temp_batch.append(sample)
         self.num_updates += self.online_iter
         if len(self.temp_batch) >= self.temp_batch_size:
-            train_loss, train_acc = self.online_train(iterations=int(self.num_updates))
-            self.report_training(sample_num, train_loss, train_acc)
+            if int(self.num_updates) > 0:
+                train_loss, train_acc = self.online_train(iterations=int(self.num_updates))
+                self.report_training(sample_num, train_loss, train_acc)
+                self.num_updates -= int(self.num_updates)
             self.temp_batch = []
-            self.num_updates -= int(self.num_updates)
 
     def add_new_class(self, class_name):
         self.cls_dict[class_name] = len(self.exposed_classes)
